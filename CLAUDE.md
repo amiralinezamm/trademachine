@@ -1,32 +1,108 @@
-# XAUUSD Trader Bot
+# CLAUDE.md — قوانین پروژه
 
-Signal/trading bot for XAUUSD. Full spec lives in `SPEC.md` (added separately) — read it
-before implementing any signal, feature, or backtest logic.
+پروژه: ربات سیگنال XAUUSD. سند کامل در `SPEC.md` است. این فایل فقط قوانین سختی است که **هرگز** نباید نقض شوند.
 
-## Status
+---
 
-Base infrastructure only, set up 2026-09-12. Not yet implemented:
-- MT5 connectivity (needs a Windows box we don't have yet)
-- Real data backfill (no data ingested yet)
-- n8n (deliberately not installed until asked for)
-- Any actual signal/model/backtest logic
+## قوانین ضدخطا — غیرقابل مذاکره
 
-## Stack
+این‌ها مهم‌ترین بخش پروژه‌اند. نقض هر کدام یعنی همه اعداد بک‌تست دروغ می‌شوند و ماه‌ها کار هدر می‌رود.
 
-- PostgreSQL 16 via Docker Compose, bound to `127.0.0.1:5432` only (see `docker-compose.yml`)
-- FastAPI service in `src/api`, Python 3.11+ venv, run with uvicorn on port 8000 (localhost only for now)
-- Docker Engine + Compose plugin (official docker.com apt repo)
+1. **هیچ تابعی حق ندارد به آینده نگاه کند.** هر تابع تحلیلی باید پارامتر `as_of_ts` بگیرد و فقط از داده‌ی تا آن لحظه استفاده کند. اگر تابعی این پارامتر را ندارد، هنوز تمام نشده.
 
-## Layout
+2. **سوئینگ تا `N` کندل بعد از خودش وجود ندارد.** تشخیص‌گر سوئینگ باید تاخیر تایید داشته باشد. اندیکاتور بازرنگ‌شونده (repainting) ممنوع مطلق.
 
-- `config/` — `params.yaml`, `event_map.yaml`, `costs.yaml` (strategy/event/cost config, placeholders until SPEC.md logic lands)
-- `config/init-db/` — SQL run once against a fresh Postgres volume (schema bootstrap)
-- `src/ingest`, `src/features`, `src/news`, `src/models`, `src/engine`, `src/backtest`, `src/discovery`, `src/api` — module boundaries per SPEC.md
-- `n8n/` — reserved, not active yet
-- `docs/`, `notebooks/`, `tests/` — as named
+3. **کندل بسته‌نشده وارد محاسبه نمی‌شود.** همیشه روی کندل بسته کار کن.
 
-## Conventions
+4. **همه زمان‌ها UTC.** ورودی از متاتریدر زمان سرور بروکر است — سر مرز تبدیل کن. نمایش به کاربر به وقت تهران، ذخیره‌سازی همیشه UTC.
 
-- Secrets live in `.env` (never committed) — see `.env.example` for required keys
-- No hardcoded credentials in code or config committed to git
-- Internal-only services (Postgres, future n8n/API) bind to `127.0.0.1` or the docker network, never `0.0.0.0` — this box holds financial data
+5. **تقسیم داده هرگز تصادفی نیست.** برای هر اعتبارسنجی: walk-forward با purging و embargo. `train_test_split` با `shuffle=True` روی این داده یعنی نتیجه بی‌معنی.
+
+6. **بک‌تست و زنده، یک کد.** موتور بک‌تست باید *همان* تابع تولید سیگنال زنده را صدا بزند. دو پیاده‌سازی جدا یعنی حتماً یک جا با هم فرق دارند و روزی که بفهمی دیر است.
+
+7. **بخش HOLDOUT مهروموم است.** آخرین ۲۰٪ داده. موتور `discovery` هرگز آن را نمی‌بیند. هر کاندید دقیقاً یک بار روی آن تست می‌شود. رد شد یعنی برای همیشه رد.
+
+---
+
+## ساختار پروژه
+
+```
+├─ SPEC.md              ← سند کامل، مرجع نهایی
+├─ CLAUDE.md            ← همین فایل
+├─ config/
+│   ├─ params.yaml      ← همه پارامترهای عددی
+│   ├─ event_map.yaml   ← نگاشت خبر به جهت طلا
+│   └─ costs.yaml       ← اسپرد، لغزش، کمیسیون
+├─ docs/
+│   └─ data_depth.md    ← خروجی اندازه‌گیری عمق تاریخچه
+├─ src/
+│   ├─ ingest/          ← mt5_bridge
+│   ├─ features/        ← levels patterns rounds gaps fib corr regime
+│   ├─ news/
+│   ├─ models/          ← ml_filter  memory  nn_forecaster
+│   ├─ engine/          ← fusion  sizing  signal
+│   ├─ backtest/
+│   ├─ discovery/
+│   └─ api/             ← FastAPI
+├─ n8n/                 ← اکسپورت جریان‌ها (JSON، در گیت)
+├─ notebooks/           ← آزمایش‌های کولب
+└─ tests/
+```
+
+---
+
+## قواعد کدنویسی
+
+- **هیچ عدد جادویی در کد نباشد.** هر آستانه، ضریب و پنجره از `config/params.yaml` خوانده شود. دلیل: بک‌تست باید بتواند پارامترها را جاروب کند بدون دست زدن به کد.
+- **هیچ محاسبه‌ای در n8n نیست.** n8n فقط زمان‌بندی، صدا زدن سرویس، جابه‌جایی داده و ارسال پیام. هر منطقی که باید بک‌تست شود، در پایتون است.
+- **هر سیگنال باید `components` را ذخیره کند** (ساختارش در SPEC بخش ۴.۱۴). بدون این، تحلیل تفکیکی ابزارها ممکن نیست.
+- **جریان‌های n8n اکسپورت و در گیت نگه داشته شوند.** جریانی که فقط در رابط گرافیکی وجود دارد، پشتیبان ندارد.
+- زمان‌ها `timestamptz`، قیمت‌ها `numeric` نه `float`.
+
+---
+
+## تعریف «تمام شد»
+
+یک ماژول وقتی تمام است که هر پنج مورد برقرار باشد:
+
+1. معیار پذیرش خودش در `SPEC.md` پاس شده.
+2. تست دارد — حداقل یک تست که ثابت کند از آینده نگاه نمی‌کند.
+3. پارامترهایش در `config/` هستند، نه در کد.
+4. از طریق API قابل صدا زدن است.
+5. خروجی‌اش در دیتابیس ذخیره می‌شود، نه فقط برگردانده می‌شود.
+
+---
+
+## ترتیب کار
+
+ماژول‌ها وابستگی دارند. این ترتیب را رعایت کن:
+
+```
+mt5_bridge  →  levels  →  patterns ─┐
+                  ↓                  ├→ fusion → sizing → delivery
+              rounds gaps fib ───────┤
+                  news ──────────────┤
+              corr regime ───────────┘
+                       ↓
+                   backtest  →  ml_filter · memory · nn_forecaster
+                                        ↓
+                                   discovery
+```
+
+`backtest` قبل از مدل‌هاست و این عمدی است: مدل فیلترکننده روی تاریخچه سیگنال‌ها آموزش می‌بیند، و آن تاریخچه خروجی بک‌تست است. بدون فاز ۲، فاز ۳ داده آموزشی ندارد.
+
+---
+
+## چیزهایی که نباید بسازی
+
+- الگوی کندلی از صفر — TA-Lib دارد.
+- موتور بک‌تست پیچیده در فاز ۲ — یک بازپخش رویدادمحور ساده که همان تابع سیگنال را صدا می‌زند کافی است.
+- شبکه عصبی قبل از اینکه عمق داده M5 اندازه‌گیری شود. زیر ۱۰۰ هزار کندل، مدل حفظ می‌کند نه یاد بگیرد.
+- مدل زبانی برای تحلیل خبر — تصمیم گرفته شده که قانون‌محور باشد.
+- پشتیبانی از چند نماد — فقط XAUUSD تا وقتی جواب بدهد.
+
+---
+
+## وقتی مطمئن نیستی
+
+اگر جایی از `SPEC.md` مبهم بود یا دو بخشش با هم نخواندند، **حدس نزن و ادامه نده**. سوال را بپرس. یک فرض اشتباه در ماژول پایه، تا فاز ۴ خودش را نشان نمی‌دهد و تا آن موقع همه چیز روی آن ساخته شده.
