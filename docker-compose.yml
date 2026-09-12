@@ -27,5 +27,28 @@ services:
   #     postgres:
   #       condition: service_healthy
 
+  n8n:
+    image: n8nio/n8n:2.39.4
+    restart: unless-stopped
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${N8N_DB_NAME}
+      DB_POSTGRESDB_USER: ${N8N_DB_USER}
+      DB_POSTGRESDB_PASSWORD: ${N8N_DB_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      GENERIC_TIMEZONE: UTC
+      TZ: UTC
+    ports:
+      - "127.0.0.1:5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n:/home/node/n8n-exports
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:
+  n8n_data:
