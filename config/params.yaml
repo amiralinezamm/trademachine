@@ -1,2 +1,28 @@
-# Strategy / model parameters.
-# Placeholder — to be filled in per SPEC.md once the signal logic is defined.
+# Strategy / model parameters. No magic numbers in code — everything
+# thresholds/windows/weights read from here (CLAUDE.md: "هیچ عدد جادویی در کد نباشد").
+
+news:
+  # Currency filter (SPEC.md 4.7): USD absolute priority, EUR/GBP half weight, rest dropped.
+  currency_weights:
+    USD: 1.0
+    EUR: 0.5
+    GBP: 0.5
+
+  blackout:
+    # SPEC.md 4.7-a
+    degree_1:  # High impact
+      before_min: 20
+      after_min: 15
+    degree_2:  # Medium impact
+      before_min: 15
+      after_min: 10
+    consensus:
+      # If another qualifying event falls within this many minutes of an
+      # event's own time, that event's before/after windows are multiplied.
+      cluster_window_min: 30
+      multiplier: 2
+
+  surprise:
+    # Below this many historical samples for the same event, only the raw
+    # sign(surprise) x gold_sign direction is reported — no z_surprise.
+    min_samples_for_z: 10

@@ -1,2 +1,71 @@
-# Economic calendar event mapping (impact levels, symbols, blackout windows).
-# Placeholder — to be filled in per SPEC.md once the news module is built.
+# Event → gold direction map (SPEC.md 4.7-b table).
+# gold_sign: -1 means "actual above forecast → gold expected DOWN" (strong data).
+#            +1 means the inverse (Unemployment Rate, Initial Jobless Claims —
+#            a higher number there means economic weakness).
+#
+# Matching is exact, case-insensitive, against `aliases` (see src/news/surprise.py).
+# The ForexFactory feed does not always use the textbook name for an indicator,
+# so each entry lists the wordings we've actually seen or expect. Aliases marked
+# "(verified in live feed 2026-09-12)" were confirmed against the real feed;
+# the rest are standard ForexFactory wording but UNVERIFIED because that event
+# type did not fire during our test week — per project rule, if a real event's
+# title doesn't match any alias here, stop and ask rather than guessing a new one.
+
+events:
+  - canonical: "Non-Farm Payrolls"
+    gold_sign: -1
+    aliases:
+      - "Non-Farm Employment Change"   # unverified — standard FF wording for NFP
+      - "Non-Farm Payrolls"
+
+  - canonical: "CPI / Core CPI"
+    gold_sign: -1
+    aliases:
+      - "CPI m/m"              # verified in live feed 2026-09-12
+      - "CPI y/y"               # verified in live feed 2026-09-12
+      - "Core CPI m/m"          # verified in live feed 2026-09-12
+      - "Core CPI y/y"          # verified in live feed 2026-09-12
+
+  - canonical: "PCE / Core PCE"
+    gold_sign: -1
+    aliases:
+      - "PCE Price Index m/m"          # unverified
+      - "Core PCE Price Index m/m"     # unverified
+      - "Core PCE Price Index y/y"     # unverified
+
+  - canonical: "GDP"
+    gold_sign: -1
+    aliases:
+      - "GDP m/m"                # verified in live feed 2026-09-12 (UK monthly GDP)
+      - "GDP q/q"                # unverified
+      - "Advance GDP q/q"        # unverified
+      - "Prelim GDP q/q"         # unverified
+      - "Final GDP q/q"          # unverified
+
+  - canonical: "Retail Sales"
+    gold_sign: -1
+    aliases:
+      - "Retail Sales m/m"        # unverified
+      - "Core Retail Sales m/m"   # unverified
+
+  - canonical: "ISM Manufacturing / Services PMI"
+    gold_sign: -1
+    aliases:
+      - "ISM Manufacturing PMI"   # unverified
+      - "ISM Services PMI"        # unverified
+
+  - canonical: "Fed Funds Rate"
+    gold_sign: -1
+    aliases:
+      - "Federal Funds Rate"   # unverified
+
+  - canonical: "Unemployment Rate"
+    gold_sign: 1
+    aliases:
+      - "Unemployment Rate"   # unverified this week (didn't fire), but exact SPEC wording
+
+  - canonical: "Initial Jobless Claims"
+    gold_sign: 1
+    aliases:
+      - "Unemployment Claims"    # verified in live feed 2026-09-12 — FF's actual title for this SPEC entry
+      - "Initial Jobless Claims"
