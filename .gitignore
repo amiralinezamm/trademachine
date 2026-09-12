@@ -1,0 +1,43 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!src/**/*.key.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+venv/
+.venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Node (n8n / tooling)
+node_modules/
+
+# Data
+data/
+*.csv
+*.parquet
+*.duckdb
+*.sqlite
+*.sqlite3
+
+# Docker
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
