@@ -1,0 +1,19 @@
+# Future analysis/ML modules (patterns, memory, ml_filter, nn_forecaster,
+# delivery charts). Installed early per SPEC.md so we're not blocked on
+# packaging once real MT5 data arrives — no analytical code uses these yet.
+#
+# TA-Lib needs the underlying C library compiled first (no Ubuntu apt
+# package exists for it): download ta-lib-0.7.1-src.tar.gz from
+# https://github.com/ta-lib/ta-lib/releases/download/v0.7.1/ta-lib-0.7.1-src.tar.gz,
+# then `./configure --prefix=/usr && make && sudo make install && sudo ldconfig`
+# BEFORE `pip install -r requirements-ml.txt`, or the TA-Lib line below fails.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+pandas==3.0.5
+numpy==2.5.3
+scipy==1.18.1
+TA-Lib==0.7.1
+stumpy==1.14.1
+lightgbm==4.7.0
+torch==2.14.0+cpu
+mplfinance==0.12.10b0
