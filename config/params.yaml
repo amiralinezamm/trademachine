@@ -26,3 +26,27 @@ news:
     # Below this many historical samples for the same event, only the raw
     # sign(surprise) x gold_sign direction is reported — no z_surprise.
     min_samples_for_z: 10
+
+mt5_bridge:
+  # WM Markets demo account, confirmed same depth on live (user, 2026-09-15).
+  symbol: "XAUUSD@"
+  timeframes: ["M1", "M5", "M15", "H1"]
+  backfill_years: 3
+
+  # Broker server time -> UTC. NOT a guess: derived by scanning every
+  # weekend gap in the full 2019-2026 H1 history (see docs/data_depth.md
+  # investigation, 2026-09-15) for the 1-hour anomaly that marks a DST
+  # transition. Found zero exceptions across 7 years:
+  #   - DST starts the Friday before the US 2nd-Sunday-of-March date
+  #   - DST ends the Friday before the EU last-Sunday-of-October date
+  #   (an unusual hybrid, not plain EET or plain "NY+offset" — but the
+  #   dates matched exactly, every year, so implemented as measured
+  #   rather than assumed to fit a named timezone.)
+  # Live cross-check against NTP-synced UTC on 2026-09-15 (DST-active
+  # period): broker time was exactly UTC+3. Transition happens over the
+  # closed-market weekend, so no candle ever falls in an ambiguous hour.
+  server_timezone:
+    dst_offset_hours: 3
+    standard_offset_hours: 2
+    dst_start_rule: "2nd_sunday_march"
+    dst_end_rule: "last_sunday_october"
