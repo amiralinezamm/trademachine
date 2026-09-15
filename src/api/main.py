@@ -42,8 +42,32 @@ app = FastAPI(title="XAUUSD Trader Bot API", lifespan=lifespan)
 
 
 @app.get("/health")
-def health():
-    return {"status": "ok"}
+async def health():
+    """Pipeline health: last candle received, last signal fired, candle lag."""
+    async with app.state.pool.acquire() as conn:
+        last_candle_row = await conn.fetchrow(
+            "SELECT ts_utc FROM candles WHERE symbol='XAUUSD@' AND tf='M5' ORDER BY ts_utc DESC LIMIT 1"
+        )
+        last_signal_row = await conn.fetchrow(
+            "SELECT ts_utc, direction, rule_version FROM signals ORDER BY id DESC LIMIT 1"
+        )
+    now = datetime.now(timezone.utc)
+    if last_candle_row:
+        lag_s = (now - last_candle_row["ts_utc"].replace(tzinfo=timezone.utc)).total_seconds()
+        last_candle_iso = last_candle_row["ts_utc"].isoformat()
+    else:
+        lag_s = None
+        last_candle_iso = None
+    return {
+        "status": "ok",
+        "last_candle_at": last_candle_iso,
+        "candle_lag_minutes": round(lag_s / 60, 1) if lag_s is not None else None,
+        "last_signal": {
+            "ts_utc": last_signal_row["ts_utc"].isoformat(),
+            "direction": last_signal_row["direction"],
+            "rule": last_signal_row["rule_version"],
+        } if last_signal_row else None,
+    }
 
 
 @app.get("/news/blackout-status")
@@ -189,6 +213,9 @@ def _check_signal_sync(symbol: str, tf: str) -> dict:
 
         signal_id = insert_signal(conn, signal)
         conn.commit()
+        if signal_id is None:
+            # Already stored for this candle+rule — don't re-fire n8n/Telegram
+            return {"signal": None, "as_of": candle["ts_utc"].isoformat(), "reason": "already_fired"}
         out = dict(signal)
         out["id"] = signal_id
         out["ts_utc"] = out["ts_utc"].isoformat()

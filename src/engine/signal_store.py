@@ -80,19 +80,29 @@ def fetch_active_levels(conn, symbol: str, tf: str, as_of_ts: datetime) -> list[
         return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
-def insert_signal(conn, signal: dict[str, Any]) -> int:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO signals (ts_utc, direction, entry, stop_loss, take_profit,
-                                  confidence, components, rule_version)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                signal["ts_utc"], signal["direction"], signal["entry"],
-                signal["stop_loss"], signal["take_profit"], signal["confidence"],
-                json.dumps(signal["components"]), signal["rule_version"],
-            ),
-        )
-        return cur.fetchone()[0]
+def insert_signal(conn, signal: dict[str, Any]) -> int | None:
+    """Insert signal, ignoring duplicates (same candle + rule_version).
+    Returns the new id, or None if a signal for this candle already exists.
+    Catches UniqueViolation explicitly to guard against concurrent inserts."""
+    import psycopg2
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO signals (ts_utc, direction, entry, stop_loss, take_profit,
+                                      confidence, components, rule_version)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ts_utc, rule_version) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    signal["ts_utc"], signal["direction"], signal["entry"],
+                    signal["stop_loss"], signal["take_profit"], signal["confidence"],
+                    json.dumps(signal["components"]), signal["rule_version"],
+                ),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        return None
