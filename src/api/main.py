@@ -6,7 +6,17 @@ import asyncpg
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
+from src.engine.level_reversion import check_level_reversion, load_rule_params
+from src.engine.signal_store import (
+    fetch_active_levels,
+    fetch_atr_at,
+    fetch_latest_closed_candle,
+    insert_signal,
+)
+from src.features.levels import compute_levels, load_levels_params
+from src.features.levels_store import fetch_candles, get_connection, upsert_levels
 from src.ingest.candles_store import TF_MINUTES, filter_closed_candles
 from src.news.blackout import get_blackout_status
 
@@ -107,3 +117,95 @@ async def ingest_candles(payload: CandlesIngestRequest):
             )
 
     return {"received": len(payload.candles), "closed": len(closed), "skipped_unclosed": len(payload.candles) - len(closed)}
+
+
+def _compute_and_store_levels_sync(symbol: str, tf: str, as_of_ts: datetime) -> dict:
+    """Sync (psycopg2) on purpose — compute_levels() is CPU-bound over
+    potentially years of candles; run via threadpool below so it doesn't
+    block the event loop."""
+    conn = get_connection()
+    try:
+        candles = fetch_candles(conn, symbol, tf, as_of_ts)
+        levels = compute_levels(candles, as_of_ts, symbol, tf)
+        write_result = upsert_levels(conn, levels)
+        conn.commit()
+    finally:
+        conn.close()
+    return {
+        "as_of": as_of_ts.isoformat(),
+        "candle_count": len(candles),
+        "level_count": len(levels),
+        **write_result,
+    }
+
+
+@app.post("/levels/compute")
+async def compute_levels_endpoint(
+    symbol: str = Query(...),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp, e.g. 2026-09-11T12:30:00Z"),
+):
+    """SPEC.md 4.2. Recomputes the full levels state as of `as_of` from raw
+    candles (CLAUDE.md rule 6: same function backtest and live) and upserts
+    into `levels` by natural key (symbol, tf_origin, created_ts)."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+
+    allowed_tfs = load_levels_params()["timeframes"]
+    if tf not in allowed_tfs:
+        raise HTTPException(status_code=422, detail=f"tf must be one of {allowed_tfs}")
+
+    return await run_in_threadpool(_compute_and_store_levels_sync, symbol, tf, ts)
+
+
+def _check_signal_sync(symbol: str, tf: str) -> dict:
+    """Sync (psycopg2) on purpose, same reasoning as levels/compute above.
+    Reads the latest closed candle, its ATR, and levels known as of that
+    candle's own ts (anti-repainting — nothing newer is used), calls the
+    same check_level_reversion() the backtest will call (CLAUDE.md rule 6),
+    and persists any resulting signal."""
+    conn = get_connection()
+    try:
+        candle = fetch_latest_closed_candle(conn, symbol, tf)
+        if candle is None:
+            return {"signal": None, "reason": "no candles for this symbol/tf"}
+
+        atr_period = load_levels_params()["atr_period"]
+        atr = fetch_atr_at(conn, symbol, tf, candle["ts_utc"], atr_period)
+        if atr is None:
+            return {"signal": None, "reason": "not enough history for ATR yet"}
+
+        levels = fetch_active_levels(conn, symbol, tf, candle["ts_utc"])
+        signal = check_level_reversion(
+            symbol=symbol, tf=tf, ts_utc=candle["ts_utc"],
+            close=float(candle["close"]), atr=atr, levels=levels,
+        )
+        if signal is None:
+            return {"signal": None, "as_of": candle["ts_utc"].isoformat()}
+
+        signal_id = insert_signal(conn, signal)
+        conn.commit()
+        out = dict(signal)
+        out["id"] = signal_id
+        out["ts_utc"] = out["ts_utc"].isoformat()
+        return {"signal": out}
+    finally:
+        conn.close()
+
+
+@app.get("/signal/latest")
+async def signal_latest(
+    symbol: str = Query("XAUUSD@"),
+    tf: str = Query("M5"),
+):
+    """Runs the level_reversion rule (src/engine/level_reversion.py) against
+    the most recent closed candle. If it fires, the signal is stored in
+    `signals` and returned; n8n polls this endpoint on a schedule."""
+    allowed_tfs = load_levels_params()["timeframes"]
+    if tf not in allowed_tfs:
+        raise HTTPException(status_code=422, detail=f"tf must be one of {allowed_tfs}")
+    return await run_in_threadpool(_check_signal_sync, symbol, tf)

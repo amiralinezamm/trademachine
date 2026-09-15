@@ -50,3 +50,40 @@ mt5_bridge:
     standard_offset_hours: 2
     dst_start_rule: "2nd_sunday_march"
     dst_end_rule: "last_sunday_october"
+
+levels:
+  # SPEC.md 4.2. Only M5 has explicit parameters in SPEC.md (N=5, k=1.0),
+  # and D2 names M5 the base analysis timeframe — so only M5 is run here.
+  # H1/M1 were considered (tf_origin column allows multi-tf) but SPEC.md
+  # gives no concrete N/k for them; adding those would be guessing, so
+  # deferred until the spec (or the user) gives real numbers for them.
+  timeframes: ["M5"]
+
+  swing_n: 5          # structural confirmation: N candles before AND after
+  swing_k: 1.0         # retracement must be >= k * ATR(14) to confirm a swing
+  atr_period: 14
+
+  zone_width_atr_mult: 0.25   # total zone width = this * ATR at birth
+  break_atr_mult: 0.5         # candle must CLOSE this many ATRs beyond the zone to count as a valid break
+  merge_atr_mult: 0.25        # zones (same kind) closer than this * ATR are merged into one
+
+  strength_lambda: 0.0015     # M5 decay rate; half-life ~460 bars (~40 trading hours)
+
+  # NOT in SPEC.md — SPEC only says "strength below a threshold -> expired"
+  # without giving the number (unlike the 8x ATR distance rule, which IS
+  # explicit). Proposed here, tied directly to the decay formula's own
+  # half-life so the reasoning is checkable: a single-touch level with zero
+  # reinforcement crosses this after ~5 half-lives (2^-5 = 0.03125) —
+  # roughly 2300 M5 bars, ~8 trading days of complete silence. Flag this
+  # explicitly as a proposal, not a spec value, until confirmed/adjusted.
+  strength_expiry_threshold: 0.03
+
+  expiry_distance_atr_mult: 8   # SPEC.md explicit: distance from current price
+
+signal_rules:
+  level_reversion:
+    id: "level_reversion_v1"
+    # User-specified today (2026-09-15), narrow first path, not from SPEC.md:
+    # price within proximity_atr_mult * ATR of an active level with
+    # above-median strength -> reversal signal (support=BUY, resistance=SELL).
+    proximity_atr_mult: 0.3
