@@ -1,0 +1,157 @@
+{
+  "id": "xauusdHealthWatchdog01",
+  "name": "XAUUSD Health Watchdog",
+  "description": null,
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "hw000001-0000-4000-8000-000000000001",
+      "name": "Every 15 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-400, 0]
+    },
+    {
+      "parameters": {
+        "url": "http://172.18.0.1:8000/health",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "hw000001-0000-4000-8000-000000000002",
+      "name": "Health check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-160, 0],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "hw000002-0000-4000-8000-000000000001",
+              "leftValue": "={{ $json.candle_lag_minutes }}",
+              "rightValue": 15,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "hw000001-0000-4000-8000-000000000003",
+      "name": "Lag > 15 min?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [80, 0]
+    },
+    {
+      "parameters": {
+        "chatId": "-1003415771278",
+        "text": "=⚠️ هشدار: فید کندل XAUUSD قطع شده — آخرین کندل {{ $json.candle_lag_minutes }} دقیقه پیش بود",
+        "additionalFields": {}
+      },
+      "id": "hw000001-0000-4000-8000-000000000004",
+      "name": "Alert: feed lagging",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [320, -120],
+      "credentials": {
+        "telegramApi": {
+          "id": "xauusdBotTelegramCred01",
+          "name": "XAUUSD Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "-1003415771278",
+        "text": "⚠️ هشدار: API سلامت XAUUSD در دسترس نیست — لطفاً سرور را بررسی کنید",
+        "additionalFields": {}
+      },
+      "id": "hw000001-0000-4000-8000-000000000005",
+      "name": "Alert: health error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [320, 120],
+      "credentials": {
+        "telegramApi": {
+          "id": "xauusdBotTelegramCred01",
+          "name": "XAUUSD Bot Telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 minutes": {
+      "main": [
+        [
+          {
+            "node": "Health check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Health check": {
+      "main": [
+        [
+          {
+            "node": "Lag > 15 min?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Alert: health error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lag > 15 min?": {
+      "main": [
+        [
+          {
+            "node": "Alert: feed lagging",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "tags": []
+}
