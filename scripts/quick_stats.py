@@ -8,7 +8,8 @@ For each signal in the last 30 days:
   - A BUY is a "hit" if close 5 bars later > entry price
   - A SELL is a "hit" if close 5 bars later < entry price
 
-Usage:
+Usage (on server — must use API venv for psycopg2):
+    source /opt/xauusd-bot/src/api/venv/bin/activate
     python scripts/quick_stats.py
 
 Requires DATABASE_URL in environment or .env file.
