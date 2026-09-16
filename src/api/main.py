@@ -539,3 +539,86 @@ async def get_latest_regime(
         return snap
     finally:
         conn.close()
+
+# ---------------------------------------------------------------------------
+# Memory (SPEC.md 4.10) — STUMPY Matrix Profile
+# ---------------------------------------------------------------------------
+import subprocess
+from src.features.memory_store import (
+    upsert_memory_result,
+    fetch_latest_memory_result,
+)
+
+MEMORY_LOG = "/tmp/memory_compute.log"
+MEMORY_PID = "/tmp/memory_compute.pid"
+MEMORY_VENV_PYTHON = "/opt/xauusd-bot/src/api/venv/bin/python3"
+MEMORY_SCRIPT = "/opt/xauusd-bot/scripts/compute_memory.py"
+
+
+def _memory_compute_running() -> bool:
+    """True if a previous compute_memory nohup job is still alive."""
+    import os
+    if not os.path.exists(MEMORY_PID):
+        return False
+    try:
+        with open(MEMORY_PID) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)  # no-op if process exists, OSError if not
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+@app.post("/memory/compute")
+async def compute_memory_endpoint(
+    symbol: str = Query("XAUUSD@"),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """SPEC.md 4.10. Launches stumpy.match() in a background nohup process
+    (can take several minutes on 212K candles) and returns immediately.
+    Poll GET /memory/result to check for completion.
+    POST again while running returns status='already_running'."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+
+    if _memory_compute_running():
+        return {"status": "already_running", "log": MEMORY_LOG}
+
+    cmd = (
+        f"nohup {MEMORY_VENV_PYTHON} {MEMORY_SCRIPT} "
+        f"{symbol} {tf} {ts.isoformat()} "
+        f"> {MEMORY_LOG} 2>&1 & echo $! > {MEMORY_PID}"
+    )
+    subprocess.Popen(cmd, shell=True)
+    return {"status": "started", "log": MEMORY_LOG, "pid_file": MEMORY_PID}
+
+
+@app.get("/memory/result")
+async def get_memory_result(
+    symbol: str = Query("XAUUSD@"),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """Return the latest memory result stored at or before as_of.
+    Returns 404 if no result has been computed yet."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    conn = get_connection()
+    try:
+        row = fetch_latest_memory_result(conn, symbol, tf, ts)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No memory result found at or before as_of")
+        if row.get("computed_at"):
+            row["computed_at"] = row["computed_at"].isoformat()
+        return row
+    finally:
+        conn.close()
