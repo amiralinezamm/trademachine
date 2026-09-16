@@ -373,3 +373,68 @@ def test_normal_level_expires_after_normal_max_days():
         "touched level older than normal_max_days must be 'expired'"
     )
 
+
+
+def test_new_swing_near_expired_level_creates_independent_level():
+    """Regression for root cause of zero active levels (2026-09-16):
+    with the old two-pass structure (swing detection first, walk-forward
+    second), _add_or_merge() saw expired zones as 'active' and silently
+    absorbed new swings into them. After the interleaved fix, the walk-forward
+    has already set status='expired' on those zones before the new swing is
+    detected, so the new swing creates its own independent active level."""
+    # Use max_break_count=2: flip 0 (resistance->support, bc=1) +
+    # flip 1 (support->resistance, bc=2 -> EXPIRED, kind=resistance).
+    # The new resistance swing at the same price would merge under old code
+    # (old level status was still 'active' at swing-detection time); under
+    # the fixed code, the old level is 'expired' -> skipped -> new level.
+    params = {**PARAMS, "max_break_count": 2}
+    N = params["swing_n"]
+
+    candles, spike_ts, spike_high = _candles_with_resistance_and_touch(spike_high=2050.0)
+    _flip_candles(candles, spike_high, n_flips=2)
+    # After 2 flips: resistance bc=2 == max_break_count -> status='expired', kind='resistance'
+
+    # Calm separator bars (price stays near spike_high, within distance threshold)
+    last_ts = candles[-1]["ts_utc"]
+    for _ in range(5):
+        last_ts += BAR
+        candles.append(_make_candle(last_ts, 2000.0, 2008.0, 1992.0, 2000.0))
+
+    # New swing HIGH at spike_high -- same zone price, same kind (resistance)
+    new_spike_ts = last_ts + BAR
+    candles.append(_make_candle(new_spike_ts, 2000.0, spike_high, 1995.0, 2001.0))
+    last_ts = new_spike_ts
+
+    # N + 3 confirmation bars
+    for _ in range(N + 3):
+        last_ts += BAR
+        candles.append(_make_candle(last_ts, 2000.0, 2008.0, 1992.0, 2000.0))
+
+    as_of_ts = last_ts
+    result = compute_levels(candles, as_of_ts, "TEST", "M5", params=params)
+
+    # Old expired resistance must still be present
+    expired = [
+        lvl for lvl in result
+        if lvl["break_count"] >= params["max_break_count"]
+        and lvl["kind"] == "resistance"
+    ]
+    assert expired, "old expired resistance level must still be present in results"
+    assert expired[0]["status"] == "expired"
+
+    # New swing must create an INDEPENDENT active resistance, not be merged in
+    active_near_spike = [
+        lvl for lvl in result
+        if lvl["status"] in ("active", "flipped")
+        and lvl["kind"] == "resistance"
+        and abs((lvl["price_low"] + lvl["price_high"]) / 2 - spike_high) < 5.0
+    ]
+    assert active_near_spike, (
+        "new swing near an expired resistance level must create its own "
+        "independent active level, not be absorbed into the expired zone"
+    )
+    new_lvl = active_near_spike[0]
+    assert new_lvl["break_count"] == 0, "new independent level must start with break_count=0"
+    assert new_lvl["created_ts"] == new_spike_ts, (
+        "new level must bear the new swing's timestamp, not the old expired one"
+    )

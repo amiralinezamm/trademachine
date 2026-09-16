@@ -119,54 +119,86 @@ def compute_levels(
 
     levels: list[dict[str, Any]] = []
 
-    # --- Swing detection (SPEC.md 4.2: two conditions, both required) ---
-    for i in range(N, n - N):
-        if math.isnan(atr[i]):
-            continue
-        before_hi, after_hi = highs[i - N:i], highs[i + 1:i + N + 1]
-        before_lo, after_lo = lows[i - N:i], lows[i + 1:i + N + 1]
-
-        if highs[i] > before_hi.max() and highs[i] > after_hi.max():
-            retrace = highs[i] - after_lo.min()
-            if retrace >= k * atr[i]:
-                half = zone_mult * atr[i] / 2
-                _add_or_merge(levels, "resistance", highs[i] - half, highs[i] + half, ts[i], i, atr[i], merge_mult * atr[i])
-
-        if lows[i] < before_lo.min() and lows[i] < after_lo.min():
-            retrace = after_hi.max() - lows[i]
-            if retrace >= k * atr[i]:
-                half = zone_mult * atr[i] / 2
-                _add_or_merge(levels, "support", lows[i] - half, lows[i] + half, ts[i], i, atr[i], merge_mult * atr[i])
-
-    # --- Touch / break walk-forward ---
-    # A level only interacts with bar j once it is itself confirmed as of j
-    # (created_idx + N <= j) — this is what stops a level from affecting
-    # (or being affected by) candles that predate its own confirmation.
+    # --- Interleaved walk-forward + swing detection ---
+    #
+    # Root-cause fix for "zero active levels" (2026-09-16): the original
+    # two-pass approach (swing detection first, walk-forward second) meant
+    # that when _add_or_merge() ran for a new swing at bar i, ALL previously
+    # detected levels still had status="active" — the walk-forward hadn't
+    # run yet, so levels that would eventually be expired (break_count >= max)
+    # were incorrectly used as merge targets for the new swing.
+    #
+    # Fix: for each bar j, run the walk-forward BEFORE detecting the swing
+    # that is confirmed at bar j (i.e., the swing at bar j-N). By the time
+    # _add_or_merge is called, every level broken by bars 0..j already has
+    # status="expired" and is correctly skipped as a merge candidate.
     for j in range(n):
-        if math.isnan(atr[j]):
+        cur_high  = highs[j]
+        cur_low   = lows[j]
+        cur_close = closes[j]
+        cur_atr   = atr[j]
+
+        # Walk-forward for bar j -- only when ATR is valid (early NaN bars
+        # have no reliable break threshold, same behaviour as before).
+        if not math.isnan(cur_atr):
+            for lvl in levels:
+                if lvl["created_idx"] + N > j or lvl["status"] not in ("active", "flipped"):
+                    continue
+                lo, hi = lvl["price_low"], lvl["price_high"]
+
+                entered = cur_low <= hi and cur_high >= lo
+                closed_outside = cur_close < lo or cur_close > hi
+                if entered and closed_outside:
+                    lvl["touch_count"] += 1
+                    lvl["last_touch"] = ts[j]
+                    lvl["touches"].append(j)
+
+                # SPEC.md: break = CLOSE beyond the zone, never wick-only.
+                if lvl["kind"] == "resistance" and cur_close > hi + break_mult * cur_atr:
+                    lvl["break_count"] += 1
+                    lvl["kind"] = "support"
+                    lvl["status"] = "expired" if lvl["break_count"] >= max_break_count else "flipped"
+                elif lvl["kind"] == "support" and cur_close < lo - break_mult * cur_atr:
+                    lvl["break_count"] += 1
+                    lvl["kind"] = "resistance"
+                    lvl["status"] = "expired" if lvl["break_count"] >= max_break_count else "flipped"
+
+        # Swing detection: bar j confirms the swing at bar j-N.
+        # A swing at swing_idx needs N bars before it and N bars after it,
+        # so it is confirmed (and added to levels) exactly when j = swing_idx + N.
+        # At this point the walk-forward above has processed bars 0..j, so any
+        # level expired by those bars is already marked "expired" -- _add_or_merge
+        # will correctly skip it and create an independent new level instead.
+        swing_idx = j - N
+        if swing_idx < N or math.isnan(atr[swing_idx]):
             continue
-        cur_high, cur_low, cur_close, cur_atr = highs[j], lows[j], closes[j], atr[j]
-        for lvl in levels:
-            if lvl["created_idx"] + N > j or lvl["status"] not in ("active", "flipped"):
-                continue
-            lo, hi = lvl["price_low"], lvl["price_high"]
 
-            entered = cur_low <= hi and cur_high >= lo
-            closed_outside = cur_close < lo or cur_close > hi
-            if entered and closed_outside:
-                lvl["touch_count"] += 1
-                lvl["last_touch"] = ts[j]
-                lvl["touches"].append(j)
+        before_hi = highs[swing_idx - N:swing_idx]
+        after_hi  = highs[swing_idx + 1:swing_idx + N + 1]
+        before_lo = lows[swing_idx - N:swing_idx]
+        after_lo  = lows[swing_idx + 1:swing_idx + N + 1]
 
-            # SPEC.md: break = CLOSE beyond the zone, never wick-only.
-            if lvl["kind"] == "resistance" and cur_close > hi + break_mult * cur_atr:
-                lvl["break_count"] += 1
-                lvl["kind"] = "support"
-                lvl["status"] = "expired" if lvl["break_count"] >= max_break_count else "flipped"
-            elif lvl["kind"] == "support" and cur_close < lo - break_mult * cur_atr:
-                lvl["break_count"] += 1
-                lvl["kind"] = "resistance"
-                lvl["status"] = "expired" if lvl["break_count"] >= max_break_count else "flipped"
+        if highs[swing_idx] > before_hi.max() and highs[swing_idx] > after_hi.max():
+            retrace = highs[swing_idx] - after_lo.min()
+            if retrace >= k * atr[swing_idx]:
+                half = zone_mult * atr[swing_idx] / 2
+                _add_or_merge(
+                    levels, "resistance",
+                    highs[swing_idx] - half, highs[swing_idx] + half,
+                    ts[swing_idx], swing_idx, atr[swing_idx],
+                    merge_mult * atr[swing_idx],
+                )
+
+        if lows[swing_idx] < before_lo.min() and lows[swing_idx] < after_lo.min():
+            retrace = after_hi.max() - lows[swing_idx]
+            if retrace >= k * atr[swing_idx]:
+                half = zone_mult * atr[swing_idx] / 2
+                _add_or_merge(
+                    levels, "support",
+                    lows[swing_idx] - half, lows[swing_idx] + half,
+                    ts[swing_idx], swing_idx, atr[swing_idx],
+                    merge_mult * atr[swing_idx],
+                )
 
     # --- Strength + expiry, evaluated as of the last confirmed bar ---
     last_idx = n - 1
@@ -185,7 +217,7 @@ def compute_levels(
         if status in ("active", "flipped") and not math.isnan(cur_atr):
             mid = (lvl["price_low"] + lvl["price_high"]) / 2
             # Strength expiry only applies to TESTED levels (touch_count > 0).
-            # A fresh level (never visited) has strength=0 by construction —
+            # A fresh level (never visited) has strength=0 by construction --
             # applying the threshold there would expire it instantly, before
             # price ever gets a chance to react to it. The time-based and
             # distance rules handle untested-level cleanup instead.
@@ -197,8 +229,8 @@ def compute_levels(
         # creation for untouched levels). This way a level tested yesterday is
         # "fresh" regardless of how old its creation date is, while a level
         # that price has abandoned for months expires cleanly.
-        # extreme = never touched (touch_count==0) → extreme_max_days
-        # normal  = tested at least once                → normal_max_days
+        # extreme = never touched (touch_count==0) -> extreme_max_days
+        # normal  = tested at least once               -> normal_max_days
         if status in ("active", "flipped"):
             anchor = lvl["last_touch"] if lvl["last_touch"] is not None else lvl["created_ts"]
             age_days = (ts[last_idx] - anchor).total_seconds() / 86400
@@ -212,7 +244,7 @@ def compute_levels(
                 "tf_origin": tf,
                 "kind": lvl["kind"],
                 # numpy scalars (from array arithmetic above) confuse psycopg2's
-                # adapter — it silently stringifies them as "np.float64(...)"
+                # adapter -- it silently stringifies them as "np.float64(...)"
                 # instead of a plain number. Cast to native Python types here,
                 # the one place results leave numpy-land.
                 "price_low": float(lvl["price_low"]),
