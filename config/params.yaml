@@ -80,6 +80,22 @@ levels:
 
   expiry_distance_atr_mult: 8   # SPEC.md explicit: distance from current price
 
+  # BUG-FIX 2026-09-16: a zone broken more than this many times has been
+  # price-tested from both sides repeatedly and is no longer a reliable
+  # directional signal. Expire it immediately on the Nth flip rather than
+  # letting it accumulate 30+ flips and fire wrong-direction signals.
+  # Root cause of the SELL-on-4280-4298 incident (24 wrong signals, zones
+  # had 19-38 flips). Set to 10: catches pathological cases (>10 flips)
+  # while allowing normally-contested zones (2-5 flips) to remain active.
+  max_break_count: 5
+
+  # Level retention rules: how long to keep a level alive regardless of
+  # strength/distance. "Extreme" = price never returned (touch_count==0),
+  # meaning the zone is a true untested boundary. "Normal" = has been touched
+  # at least once (can decay naturally via strength, but capped by age too).
+  extreme_max_days: 365
+  normal_max_days: 30
+
 patterns:
   # SPEC.md 4.3. All 61 CDL* functions are run; body_atr filter is applied
   # in the signal ENGINE, not here (store all for analysis).

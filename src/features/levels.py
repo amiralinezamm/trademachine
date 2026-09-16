@@ -113,6 +113,9 @@ def compute_levels(
     lam = params["strength_lambda"]
     expiry_strength = params["strength_expiry_threshold"]
     expiry_dist_mult = params["expiry_distance_atr_mult"]
+    max_break_count = params.get("max_break_count", 5)
+    extreme_max_days = params.get("extreme_max_days", 365)
+    normal_max_days = params.get("normal_max_days", 30)
 
     levels: list[dict[str, Any]] = []
 
@@ -159,11 +162,11 @@ def compute_levels(
             if lvl["kind"] == "resistance" and cur_close > hi + break_mult * cur_atr:
                 lvl["break_count"] += 1
                 lvl["kind"] = "support"
-                lvl["status"] = "flipped"
+                lvl["status"] = "expired" if lvl["break_count"] >= max_break_count else "flipped"
             elif lvl["kind"] == "support" and cur_close < lo - break_mult * cur_atr:
                 lvl["break_count"] += 1
                 lvl["kind"] = "resistance"
-                lvl["status"] = "flipped"
+                lvl["status"] = "expired" if lvl["break_count"] >= max_break_count else "flipped"
 
     # --- Strength + expiry, evaluated as of the last confirmed bar ---
     last_idx = n - 1
@@ -181,7 +184,26 @@ def compute_levels(
         status = lvl["status"]
         if status in ("active", "flipped") and not math.isnan(cur_atr):
             mid = (lvl["price_low"] + lvl["price_high"]) / 2
-            if strength < expiry_strength or abs(cur_close - mid) > expiry_dist_mult * cur_atr:
+            # Strength expiry only applies to TESTED levels (touch_count > 0).
+            # A fresh level (never visited) has strength=0 by construction —
+            # applying the threshold there would expire it instantly, before
+            # price ever gets a chance to react to it. The time-based and
+            # distance rules handle untested-level cleanup instead.
+            strength_expired = lvl["touch_count"] > 0 and strength < expiry_strength
+            if strength_expired or abs(cur_close - mid) > expiry_dist_mult * cur_atr:
+                status = "expired"
+
+        # Time-based retention: age is measured from the LAST TOUCH (or from
+        # creation for untouched levels). This way a level tested yesterday is
+        # "fresh" regardless of how old its creation date is, while a level
+        # that price has abandoned for months expires cleanly.
+        # extreme = never touched (touch_count==0) → extreme_max_days
+        # normal  = tested at least once                → normal_max_days
+        if status in ("active", "flipped"):
+            anchor = lvl["last_touch"] if lvl["last_touch"] is not None else lvl["created_ts"]
+            age_days = (ts[last_idx] - anchor).total_seconds() / 86400
+            max_days = extreme_max_days if lvl["touch_count"] == 0 else normal_max_days
+            if age_days > max_days:
                 status = "expired"
 
         result.append(

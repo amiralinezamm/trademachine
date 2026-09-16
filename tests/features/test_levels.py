@@ -45,6 +45,9 @@ PARAMS = {
     "strength_lambda": 0.0015,
     "strength_expiry_threshold": 0.03,
     "expiry_distance_atr_mult": 8,
+    "max_break_count": 5,
+    "extreme_max_days": 365,
+    "normal_max_days": 30,
 }
 
 
@@ -246,9 +249,17 @@ def test_flipped_level_strength_is_halved():
 
     as_of_before = candles[-1]["ts_utc"]  # after touch, before break
     result_before = compute_levels(candles, as_of_before, "TEST", "M5", params=PARAMS)
-    active = [lvl for lvl in result_before if lvl["status"] in ("active", "flipped")]
-    assert active, "expected at least one active level before the break"
-    strength_before = active[0]["strength"]
+    # Filter for the resistance zone near spike_high specifically — other zones
+    # (support zones from the oscillating baseline) may also appear in the
+    # result now that fresh untouched levels are no longer expired by strength.
+    resistance_before = [
+        lvl for lvl in result_before
+        if lvl["status"] in ("active", "flipped")
+        and lvl["kind"] == "resistance"
+        and abs((lvl["price_low"] + lvl["price_high"]) / 2 - spike_high) < 5
+    ]
+    assert resistance_before, "expected the resistance zone near spike_high to be active"
+    strength_before = resistance_before[0]["strength"]
 
     # Add the break candle
     break_ts = candles[-1]["ts_utc"] + BAR
@@ -266,5 +277,99 @@ def test_flipped_level_strength_is_halved():
     # After the flip strength must be strictly less than before (halved + decay)
     assert strength_after < strength_before, (
         f"strength should decrease on flip (before={strength_before:.4f}, after={strength_after:.4f})"
+    )
+
+
+def _flip_candles(candles, spike_high, n_flips):
+    """Append n_flips alternating break candles to candles (in-place).
+    Zone starts as resistance (even flip breaks upward, odd breaks downward).
+    Calm bars between flips stay near spike_high so they never accidentally
+    trigger an extra break — a close at zone mid is inside both thresholds
+    (zone_lo - 0.5*ATR and zone_hi + 0.5*ATR) for any realistic ATR."""
+    zone_mid = spike_high  # close enough to mid for any fixture ATR
+    last_ts = candles[-1]["ts_utc"]
+    for flip in range(n_flips):
+        last_ts += BAR
+        if flip % 2 == 0:
+            # resistance → support: close well above zone_hi + 0.5*ATR
+            candles.append(_make_candle(
+                last_ts, spike_high + 10, spike_high + 30,
+                spike_high + 9, spike_high + 25,
+            ))
+        else:
+            # support → resistance: close well below zone_lo - 0.5*ATR
+            candles.append(_make_candle(
+                last_ts, spike_high - 10, spike_high - 9,
+                spike_high - 30, spike_high - 25,
+            ))
+        # Calm bars at zone_mid — won't enter zone (open/close outside the
+        # 2-pt zone width) but also won't trigger extra breaks.
+        for _ in range(10):
+            last_ts += BAR
+            candles.append(_make_candle(
+                last_ts, zone_mid + 1, zone_mid + 3, zone_mid - 3, zone_mid,
+            ))
+
+
+def test_level_expires_after_max_break_count():
+    """Regression for 2026-09-16 SELL-on-support incident: a zone broken
+    max_break_count times must be immediately expired and not used for signals.
+    Root cause: levels with 19–38 flips were classified as 'resistance' and
+    generated 24 wrong SELL signals in the 4280-4298 zone."""
+    max_bc = PARAMS["max_break_count"]
+    candles, spike_ts, spike_high = _candles_with_resistance_and_touch()
+    _flip_candles(candles, spike_high, max_bc)
+
+    as_of_ts = candles[-1]["ts_utc"]
+    result = compute_levels(candles, as_of_ts, "TEST", "M5", params=PARAMS)
+
+    zone = [lvl for lvl in result if lvl["break_count"] >= max_bc]
+    assert zone, f"expected a level with break_count>={max_bc}, got statuses={[l['status'] for l in result]}"
+    assert zone[0]["status"] == "expired", (
+        f"level with {zone[0]['break_count']} breaks must be 'expired', "
+        f"got '{zone[0]['status']}'"
+    )
+
+
+def test_level_still_active_at_max_break_count_minus_one():
+    """Boundary: max_break_count - 1 flips must NOT trigger the break-count
+    expiry (though strength/distance expiry may still apply)."""
+    max_bc = PARAMS["max_break_count"]
+    candles, spike_ts, spike_high = _candles_with_resistance_and_touch()
+    _flip_candles(candles, spike_high, max_bc - 1)
+
+    as_of_ts = candles[-1]["ts_utc"]
+    result = compute_levels(candles, as_of_ts, "TEST", "M5", params=PARAMS)
+
+    zone = [lvl for lvl in result if lvl["break_count"] == max_bc - 1]
+    assert zone, f"expected a level with break_count=={max_bc - 1}"
+    # The level must NOT be expired solely because of break_count
+    # (it could expire from distance/strength, but break_count-1 < max_bc so
+    # that path is closed — only the other expiry conditions can trigger here,
+    # which the fixture is designed to avoid: distance ~50 << 8*ATR, strength >> 0.03)
+    assert zone[0]["status"] in ("active", "flipped"), (
+        f"level with only {zone[0]['break_count']} breaks must still be "
+        f"active/flipped, got '{zone[0]['status']}'"
+    )
+
+
+def test_normal_level_expires_after_normal_max_days():
+    """Time-based retention: a level with touch_count > 0 must be expired
+    once it is older than normal_max_days (30 days by default)."""
+    params = {**PARAMS, "normal_max_days": 1}  # 1-day limit for the test
+    candles, spike_ts, spike_high = _candles_with_resistance_and_touch()
+    # Append >1 day worth of bars (1 day = 24*12 = 288 M5 bars)
+    last_ts = candles[-1]["ts_utc"]
+    for _ in range(300):
+        last_ts += BAR
+        candles.append(_make_candle(last_ts, 2000.0, 2008.0, 1992.0, 2000.0))
+
+    as_of_ts = candles[-1]["ts_utc"]
+    result = compute_levels(candles, as_of_ts, "TEST", "M5", params=params)
+
+    touched_levels = [lvl for lvl in result if lvl["touch_count"] > 0]
+    assert touched_levels, "fixture must produce a touched level"
+    assert all(lvl["status"] == "expired" for lvl in touched_levels), (
+        "touched level older than normal_max_days must be 'expired'"
     )
 
