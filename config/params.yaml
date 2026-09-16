@@ -80,6 +80,14 @@ levels:
 
   expiry_distance_atr_mult: 8   # SPEC.md explicit: distance from current price
 
+patterns:
+  # SPEC.md 4.3. All 61 CDL* functions are run; body_atr filter is applied
+  # in the signal ENGINE, not here (store all for analysis).
+  atr_period: 14
+  # Distance from candle mid to level zone mid, in ATR multiples, for the
+  # at_level_id linkage (pattern is "at a level" if within this threshold).
+  at_level_distance_atr_mult: 0.5
+
 signal_rules:
   level_reversion:
     id: "level_reversion_v1"

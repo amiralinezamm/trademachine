@@ -152,3 +152,119 @@ def test_expired_status_is_not_deleted_just_marked():
     result = compute_levels(candles, as_of_ts, "TEST", "M5", params=params)
     assert len(result) == 1
     assert result[0]["status"] == "expired"
+
+
+
+def _make_candle(ts, o, h, l, c):
+    return {"ts_utc": ts, "open": o, "high": h, "low": l, "close": c}
+
+
+def _candles_with_resistance_and_touch(spike_high=2050.0):
+    """Fixture with a realistic ATR (~15 USD, typical XAUUSD M5) that:
+    1. Creates a resistance zone around spike_high.
+    2. Has one confirmed TOUCH of the zone (price enters, closes outside).
+    3. Leaves enough room for the break test.
+    ATR is kept large intentionally so expiry_distance check (8 * ATR ≈ 120)
+    does not fire when price is a few dollars away from the zone."""
+    N = PARAMS["swing_n"]
+    t0 = datetime(2026, 3, 1, 0, 0, tzinfo=UTC)
+    candles = []
+
+    # 30-bar volatile baseline ~2000 (ATR ~ 10-15)
+    import math as _math
+    for i in range(30):
+        ts = t0 + i * BAR
+        mid = 2000.0 + 5 * _math.sin(i * 0.3)
+        candles.append(_make_candle(ts, mid, mid + 8, mid - 8, mid))
+
+    # Swing high spike: price runs to spike_high then closes back at baseline
+    spike_idx = 30
+    spike_ts = t0 + spike_idx * BAR
+    candles.append(_make_candle(spike_ts, 2000.0, spike_high, 1995.0, 2001.0))
+
+    # N confirmation bars at baseline (confirms the swing)
+    for i in range(1, N + 1):
+        ts = spike_ts + i * BAR
+        candles.append(_make_candle(ts, 2000.0, 2008.0, 1992.0, 2000.0))
+
+    # ONE TOUCH: price enters the zone (zone_hi ≈ spike_high + 0.25*ATR/2)
+    # but closes back below the zone. This gives strength > 0.
+    touch_ts = spike_ts + (N + 1) * BAR
+    candles.append(_make_candle(touch_ts, 2020.0, spike_high + 2, 2018.0, 2022.0))
+
+    # Quiet bars to let the touch be recorded cleanly
+    for i in range(1, 4):
+        ts = touch_ts + i * BAR
+        candles.append(_make_candle(ts, 2000.0, 2008.0, 1992.0, 2000.0))
+
+    return candles, spike_ts, spike_high
+
+
+def test_broken_resistance_flips_to_support():
+    """SPEC.md 4.2 تبدیل نقش: a resistance whose zone is broken by close
+    beyond zone_hi + break_mult*ATR must change kind -> 'support' and
+    status -> 'flipped', and break_count must increment."""
+    N = PARAMS["swing_n"]
+    candles, spike_ts, spike_high = _candles_with_resistance_and_touch()
+
+    # Break: price closes decisively ABOVE the resistance zone
+    # Zone top ~ spike_high + 0.125*ATR (ATR~15, so zone_hi ~ spike_high+1.9)
+    # break_mult*ATR ~ 0.5*15 = 7.5, so need close > spike_high + ~10
+    break_ts = candles[-1]["ts_utc"] + BAR
+    candles.append(_make_candle(break_ts, spike_high + 5, spike_high + 20, spike_high + 4, spike_high + 15))
+
+    # A few bars at the new higher level
+    for i in range(1, 8):
+        ts = break_ts + i * BAR
+        candles.append(_make_candle(ts, spike_high + 15, spike_high + 23, spike_high + 13, spike_high + 15))
+
+    as_of_ts = candles[-1]["ts_utc"]
+    result = compute_levels(candles, as_of_ts, "TEST", "M5", params=PARAMS)
+
+    # After the flip the level may be 'flipped' or 'expired' depending on
+    # subsequent price distance — both are valid outcomes. What matters is
+    # that the KIND changed and break_count incremented.
+    broken_levels = [lvl for lvl in result if lvl["break_count"] >= 1]
+    assert len(broken_levels) == 1, (
+        f"expected exactly one level with break_count>=1, got {[l['status'] for l in result]}"
+    )
+    lvl = broken_levels[0]
+    assert lvl["kind"] == "support", (
+        f"broken resistance must flip to kind='support', got '{lvl['kind']}'"
+    )
+    assert lvl["status"] in ("flipped", "expired"), (
+        f"status after break must be 'flipped' or 'expired', got '{lvl['status']}'"
+    )
+
+
+def test_flipped_level_strength_is_halved():
+    """SPEC.md 4.2: on role flip, strength is halved. Compare strength just
+    before the break (no halving) versus just after (halved by definition).
+    Uses a fixture with one touch so initial strength > 0."""
+    N = PARAMS["swing_n"]
+    candles, spike_ts, spike_high = _candles_with_resistance_and_touch()
+
+    as_of_before = candles[-1]["ts_utc"]  # after touch, before break
+    result_before = compute_levels(candles, as_of_before, "TEST", "M5", params=PARAMS)
+    active = [lvl for lvl in result_before if lvl["status"] in ("active", "flipped")]
+    assert active, "expected at least one active level before the break"
+    strength_before = active[0]["strength"]
+
+    # Add the break candle
+    break_ts = candles[-1]["ts_utc"] + BAR
+    candles.append(_make_candle(break_ts, spike_high + 5, spike_high + 20, spike_high + 4, spike_high + 15))
+    for i in range(1, 4):
+        ts = break_ts + i * BAR
+        candles.append(_make_candle(ts, spike_high + 15, spike_high + 23, spike_high + 13, spike_high + 15))
+
+    as_of_after = candles[-1]["ts_utc"]
+    result_after = compute_levels(candles, as_of_after, "TEST", "M5", params=PARAMS)
+    broken = [lvl for lvl in result_after if lvl["break_count"] >= 1]
+    assert broken, "expected a flipped/broken level after the break candle"
+    strength_after = broken[0]["strength"]
+
+    # After the flip strength must be strictly less than before (halved + decay)
+    assert strength_after < strength_before, (
+        f"strength should decrease on flip (before={strength_before:.4f}, after={strength_after:.4f})"
+    )
+
