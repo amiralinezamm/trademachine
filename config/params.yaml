@@ -134,3 +134,10 @@ round_numbers:
     25:  0.6
     10:  0.4
     5:   0.3
+
+gaps:
+  min_size_dollars: 3.0       # gaps smaller than this are ignored
+  initial_weight: 0.78        # Osler study: 78.6% of FX gaps fill → weight 0.78
+  decay_rate_per_hour: 0.05   # DESIGN DECISION: SPEC does not specify; ~14h half-life
+  half_fill_fraction: 0.5     # 50% fill triggers HALF_FILLED state
+  fill_mode: body             # body=close crosses gap edge; wick=high/low touches

@@ -298,3 +298,96 @@ async def round_numbers_acceptance(
         return acceptance_stats(conn, symbol, tf)
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Gaps (SPEC.md 4.5)
+# ---------------------------------------------------------------------------
+from src.features.gaps import compute_gaps, backtest_two_phase_claim, load_gaps_params
+from src.features.gaps_store import (
+    fetch_candles as fetch_candles_gaps,
+    upsert_gaps,
+    store_backtest_result,
+    fetch_open_gaps,
+)
+
+
+def _compute_and_store_gaps_sync(symbol: str, tf: str, ts: datetime) -> dict:
+    conn = get_connection()
+    try:
+        candles = fetch_candles_gaps(conn, symbol, tf, ts)
+        params  = load_gaps_params()
+        gaps    = compute_gaps(candles, ts, symbol, tf, params=params)
+        result  = upsert_gaps(conn, gaps)
+        conn.commit()
+        by_status: dict = {}
+        for g in gaps:
+            by_status[g["status"]] = by_status.get(g["status"], 0) + 1
+        return {"upserted": result["upserted"], "total": len(gaps), "by_status": by_status}
+    finally:
+        conn.close()
+
+
+def _run_backtest_sync(symbol: str, tf: str, ts: datetime) -> dict:
+    conn = get_connection()
+    try:
+        candles = fetch_candles_gaps(conn, symbol, tf, ts)
+        params  = load_gaps_params()
+        bt      = backtest_two_phase_claim(candles, ts, params=params)
+        store_backtest_result(conn, bt)
+        conn.commit()
+        return bt
+    finally:
+        conn.close()
+
+
+@app.post("/gaps/compute")
+async def compute_gaps_endpoint(
+    symbol: str = Query(...),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """SPEC.md 4.5. Compute gaps up to as_of and upsert into gaps table."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return await run_in_threadpool(_compute_and_store_gaps_sync, symbol, tf, ts)
+
+
+@app.post("/gaps/backtest")
+async def run_gaps_backtest(
+    symbol: str = Query("XAUUSD@"),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """SPEC.md 4.5 two-phase backtest. Runs both body and wick modes; writes to rules table."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return await run_in_threadpool(_run_backtest_sync, symbol, tf, ts)
+
+
+@app.get("/gaps/open")
+async def get_open_gaps(
+    symbol: str = Query("XAUUSD@"),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """Return OPEN and HALF_FILLED gaps as of as_of."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    conn = get_connection()
+    try:
+        return fetch_open_gaps(conn, symbol, tf, ts)
+    finally:
+        conn.close()
