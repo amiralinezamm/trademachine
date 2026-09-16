@@ -236,3 +236,65 @@ async def signal_latest(
     if tf not in allowed_tfs:
         raise HTTPException(status_code=422, detail=f"tf must be one of {allowed_tfs}")
     return await run_in_threadpool(_check_signal_sync, symbol, tf)
+
+
+# ---------------------------------------------------------------------------
+# Round numbers (SPEC.md 4.4)
+# ---------------------------------------------------------------------------
+from src.features.round_numbers import compute_round_numbers, load_round_numbers_params
+from src.features.round_numbers_store import (
+    fetch_candles_with_volume,
+    upsert_round_number_hits,
+    acceptance_stats,
+)
+
+
+def _compute_and_store_round_numbers_sync(symbol: str, tf: str, ts: datetime) -> dict:
+    conn = get_connection()
+    try:
+        candles = fetch_candles_with_volume(conn, symbol, tf, ts)
+        hits = compute_round_numbers(candles, ts, symbol, tf)
+        result = upsert_round_number_hits(conn, hits)
+        conn.commit()
+        by_state = {}
+        for h in hits:
+            by_state[h["state"]] = by_state.get(h["state"], 0) + 1
+        return {
+            "symbol": symbol, "tf": tf, "as_of": ts.isoformat(),
+            "total_hits": len(hits),
+            "by_state": by_state,
+            **result,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/round_numbers/compute")
+async def compute_round_numbers_endpoint(
+    symbol: str = Query(...),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """SPEC.md 4.4. Compute round-number hit events up to as_of and upsert
+    into round_number_hits. Returns counts by state."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return await run_in_threadpool(_compute_and_store_round_numbers_sync, symbol, tf, ts)
+
+
+@app.get("/round_numbers/acceptance")
+async def round_numbers_acceptance(
+    symbol: str = Query("XAUUSD@"),
+    tf: str = Query("M5"),
+):
+    """SPEC.md 4.4 acceptance criterion: compare reversal rate near round
+    numbers vs the baseline candle-close-down rate."""
+    conn = get_connection()
+    try:
+        return acceptance_stats(conn, symbol, tf)
+    finally:
+        conn.close()

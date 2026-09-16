@@ -111,3 +111,26 @@ signal_rules:
     # price within proximity_atr_mult * ATR of an active level with
     # above-median strength -> reversal signal (support=BUY, resistance=SELL).
     proximity_atr_mult: 0.3
+
+round_numbers:
+  # SPEC.md 4.4. Psychological price levels and their dual effect.
+  # Two behaviors: REVERSAL (profit-taking walls) and ACCELERATION (stop cascade).
+  atr_period: 14
+  volume_median_bars: 20     # bars for tick_volume median (anti-lookahead: only past bars)
+
+  # Zone width = max(zone_min_width, zone_atr_mult * ATR).
+  # Dynamic scaling prevents over-wide zones in quiet markets and under-wide in volatile.
+  zone_atr_mult: 0.3
+  zone_min_width: 1.0        # dollars; lower bound so zone never vanishes at low ATR
+
+  # ACCELERATION criterion: close > this*ATR beyond the round number (not beyond zone edge)
+  break_atr_mult: 0.3
+
+  # Weight hierarchy (highest applicable multiplier wins per level).
+  # SPEC.md 4.4: 100→1.0, 50→0.8, 25→0.6, 10→0.4, 5→0.3
+  multiples:
+    100: 1.0
+    50:  0.8
+    25:  0.6
+    10:  0.4
+    5:   0.3
