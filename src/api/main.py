@@ -466,3 +466,76 @@ async def get_fibonacci_zones(
         return {"symbol": symbol, "tf": tf, "as_of": ts.isoformat(), "zones": zones}
     finally:
         conn.close()
+
+# ---------------------------------------------------------------------------
+# Regime (SPEC.md 4.9)
+# ---------------------------------------------------------------------------
+from src.features.regime import compute_regime, load_regime_params
+from src.features.regime_store import (
+    upsert_regime_snapshots,
+    fetch_latest_regime,
+    fetch_regime_snapshots,
+)
+
+
+def _compute_and_store_regime_sync(symbol: str, tf: str, ts: datetime) -> dict:
+    conn = get_connection()
+    try:
+        candles = fetch_candles(conn, symbol, tf, ts)
+        result = compute_regime(candles, ts, symbol, tf)
+        write = upsert_regime_snapshots(conn, result["snapshots"])
+        conn.commit()
+        regime_counts: dict = {}
+        for s in result["snapshots"]:
+            regime_counts[s["regime"]] = regime_counts.get(s["regime"], 0) + 1
+        return {
+            "symbol": symbol, "tf": tf, "as_of": ts.isoformat(),
+            "snapshot_count": len(result["snapshots"]),
+            "regime_counts": regime_counts,
+            "breakout_prob": result["breakout_prob"],
+            **write,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/regime/compute")
+async def compute_regime_endpoint(
+    symbol: str = Query(...),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """SPEC.md 4.9. Classify each bar as trend/range/gray using ADX+BB
+    percentile rule, compute range duration distribution by hour/session
+    and breakout probability curve, upsert all snapshots into regime_snapshots."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return await run_in_threadpool(_compute_and_store_regime_sync, symbol, tf, ts)
+
+
+@app.get("/regime/latest")
+async def get_latest_regime(
+    symbol: str = Query("XAUUSD@"),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """Return the most-recent regime snapshot stored at or before as_of."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    conn = get_connection()
+    try:
+        snap = fetch_latest_regime(conn, symbol, tf, ts)
+        if snap is None:
+            raise HTTPException(status_code=404, detail="No regime snapshot found at or before as_of")
+        snap["ts_utc"] = snap["ts_utc"].isoformat()
+        return snap
+    finally:
+        conn.close()
