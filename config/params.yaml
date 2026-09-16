@@ -141,3 +141,36 @@ gaps:
   decay_rate_per_hour: 0.05   # DESIGN DECISION: SPEC does not specify; ~14h half-life
   half_fill_fraction: 0.5     # 50% fill triggers HALF_FILLED state
   fill_mode: body             # body=close crosses gap edge; wick=high/low touches
+
+fibonacci:
+  # SPEC.md 4.6. Retracement and extension levels from active S/R swings.
+  atr_period: 14
+  # DESIGN DECISION: SPEC says "swings from levels" but not which pairs.
+  # Using all (support, resistance) pairs within this many ATRs of each other.
+  max_pair_distance_atr: 60
+  # Limit to closest N pairs by range width near current price.
+  max_pairs: 10
+  # Overlap threshold: fib price within this*ATR of a level mid -> overlapping=True.
+  overlap_atr_mult: 0.25
+  retracement_levels: [38.2, 50.0, 61.8]
+  extension_levels: [61.8, 100.0, 161.8]
+
+regime:
+  # SPEC.md 4.9.
+  atr_period: 14
+  adx_period: 14
+  bb_period: 20
+  bb_std: 2.0
+  trend_adx_thresh: 25
+  range_adx_thresh: 20
+  # DESIGN DECISION: rolling percentile window for BB width. 1000 M5 bars ~3.5 days.
+  bb_width_pct_window: 1000
+  range_bb_pct_thresh: 30
+
+memory:
+  # SPEC.md 4.10.
+  window_k: 48
+  horizon_h: 12
+  top_n: 50
+  ci_level: 0.95
+  n_bootstrap: 1000

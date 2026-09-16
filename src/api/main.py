@@ -391,3 +391,78 @@ async def get_open_gaps(
         return fetch_open_gaps(conn, symbol, tf, ts)
     finally:
         conn.close()
+
+# ---------------------------------------------------------------------------
+# Fibonacci (SPEC.md 4.6)
+# ---------------------------------------------------------------------------
+from src.features.fibonacci import compute_fibonacci, load_fibonacci_params
+from src.features.fibonacci_store import (
+    fetch_active_levels_for_fib,
+    upsert_fibonacci_zones,
+    fetch_fibonacci_zones,
+)
+
+
+def _compute_and_store_fibonacci_sync(symbol: str, tf: str, ts: datetime) -> dict:
+    conn = get_connection()
+    try:
+        candles = fetch_candles(conn, symbol, tf, ts)
+        active_levels = fetch_active_levels_for_fib(conn, symbol, tf, ts)
+        zones = compute_fibonacci(candles, ts, symbol, tf, active_levels)
+        result = upsert_fibonacci_zones(conn, zones)
+        conn.commit()
+        by_role: dict = {}
+        for z in zones:
+            by_role[z["role"]] = by_role.get(z["role"], 0) + 1
+        return {
+            "symbol": symbol, "tf": tf, "as_of": ts.isoformat(),
+            "active_level_count": len(active_levels),
+            "zone_count": len(zones),
+            "by_role": by_role,
+            **result,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/fibonacci/compute")
+async def compute_fibonacci_endpoint(
+    symbol: str = Query(...),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """SPEC.md 4.6. Compute Fibonacci zones from active levels as of as_of
+    and upsert into fibonacci_zones. Swings are read from the levels table
+    (NEVER computed independently). Extension levels are profit-target only
+    (role='extension'); retracement levels are entry-zone candidates."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return await run_in_threadpool(_compute_and_store_fibonacci_sync, symbol, tf, ts)
+
+
+@app.get("/fibonacci/zones")
+async def get_fibonacci_zones(
+    symbol: str = Query("XAUUSD@"),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+    role: str | None = Query(None, description="Filter by role: retracement or extension"),
+):
+    """Return the latest Fibonacci zones snapshot stored at or before as_of."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    if role and role not in ("retracement", "extension"):
+        raise HTTPException(status_code=422, detail="role must be 'retracement' or 'extension'")
+    conn = get_connection()
+    try:
+        zones = fetch_fibonacci_zones(conn, symbol, tf, ts, role=role)
+        return {"symbol": symbol, "tf": tf, "as_of": ts.isoformat(), "zones": zones}
+    finally:
+        conn.close()
