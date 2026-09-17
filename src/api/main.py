@@ -548,6 +548,7 @@ from src.features.memory_store import (
     upsert_memory_result,
     fetch_latest_memory_result,
 )
+from src.ingest.timezones import load_mt5_params
 
 MEMORY_LOG = "/tmp/memory_compute.log"
 MEMORY_PID = "/tmp/memory_compute.pid"
@@ -575,10 +576,21 @@ async def compute_memory_endpoint(
     tf: str = Query("M5"),
     as_of: str = Query(..., description="ISO-8601 timestamp"),
 ):
-    """SPEC.md 4.10. Launches stumpy.match() in a background nohup process
+    """SPEC.md 4.10. Launches stumpy.match() in a background process
     (can take several minutes on 212K candles) and returns immediately.
     Poll GET /memory/result to check for completion.
-    POST again while running returns status='already_running'."""
+    POST again while running returns status='already_running'.
+
+    SECURITY (2026-09-17): symbol/tf are whitelisted against the same
+    project-wide values used by /levels/compute — CLAUDE.md D1 fixes
+    symbol to a single value ("XAUUSD@"), so that's the whitelist for
+    symbol; tf reuses load_levels_params()["timeframes"], same source
+    /levels/compute already validates against. The subprocess is launched
+    with an argument LIST and shell=False (no shell string, so shell
+    metacharacters in symbol/tf have no special meaning even if they
+    somehow got past the whitelist) and start_new_session=True (detaches
+    the child from this request's process group, replacing the old
+    `nohup ... &` shell trick without needing a shell at all)."""
     try:
         ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
     except ValueError:
@@ -586,15 +598,26 @@ async def compute_memory_endpoint(
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
 
+    allowed_symbol = load_mt5_params()["symbol"]
+    if symbol != allowed_symbol:
+        raise HTTPException(status_code=422, detail=f"symbol must be {allowed_symbol!r}")
+
+    allowed_tfs = load_levels_params()["timeframes"]
+    if tf not in allowed_tfs:
+        raise HTTPException(status_code=422, detail=f"tf must be one of {allowed_tfs}")
+
     if _memory_compute_running():
         return {"status": "already_running", "log": MEMORY_LOG}
 
-    cmd = (
-        f"nohup {MEMORY_VENV_PYTHON} {MEMORY_SCRIPT} "
-        f"{symbol} {tf} {ts.isoformat()} "
-        f"> {MEMORY_LOG} 2>&1 & echo $! > {MEMORY_PID}"
-    )
-    subprocess.Popen(cmd, shell=True)
+    with open(MEMORY_LOG, "w") as log_f:
+        proc = subprocess.Popen(
+            [MEMORY_VENV_PYTHON, MEMORY_SCRIPT, symbol, tf, ts.isoformat()],
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,  # detach — survives this request finishing
+        )
+    with open(MEMORY_PID, "w") as pid_f:
+        pid_f.write(str(proc.pid))
     return {"status": "started", "log": MEMORY_LOG, "pid_file": MEMORY_PID}
 
 
