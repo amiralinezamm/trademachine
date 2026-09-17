@@ -189,8 +189,9 @@ def upsert_pressure_episodes(conn, symbol: str, tf: str, episodes: list[dict[str
 
 
 def store_pressure_reversal_backtest(conn, bt: dict[str, Any]) -> None:
-    """Registers pressure_reversal in `rules` as 'testing' (SPEC gives no
-    numeric accept/reject gate for this one -- see correlation.py docstring)."""
+    """Registers pressure_reversal in `rules` as verified/rejected -- the
+    decision rule is in backtest_pressure_reversal()'s docstring
+    (correlation.py), applied there before this function is ever called."""
     with conn.cursor() as cur:
         cur.execute(
             """

@@ -239,3 +239,8 @@ correlation:
   # pressure_sum_window (a round, documented guess, not hidden).
   pressure_discharge_lookout_bars: 96
   pressure_validation_horizons: [12, 24]  # SPEC.md explicit
+  # DESIGN DECISION (added 2026-09-18, see backtest_pressure_reversal()
+  # docstring): minimum discharge success rate for 'verified'. SPEC gives
+  # no number here either; 0.5 (a coin flip) is the lowest bar at which a
+  # "does it usually discharge" claim means anything at all.
+  pressure_min_success_rate: 0.5

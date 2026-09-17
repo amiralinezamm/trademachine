@@ -497,19 +497,30 @@ def backtest_pressure_reversal(
     params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """SPEC.md 4.8-c validation: answers exactly the three questions SPEC
-    asks, no additional accept/reject gate invented (SPEC frames this as a
-    reporting test, not a pass/fail threshold like 4.8-b's binomial test --
-    so unlike oil_shock_divergence, this is always registered as 'testing'
-    in `rules`, evidence-only, per CLAUDE.md's proposed->testing->(verified|
-    rejected) path: a human reviews the evidence to move it further).
+    asks, THEN applies an explicit accept/reject rule (corrected 2026-09-18
+    -- an earlier version of this function always registered 'testing'
+    regardless of the answers, which a user review correctly called out as
+    avoiding a verdict the data already gave clearly):
 
-      1. Is the discharge move really bigger than normal? (mean/median of
-         the horizon return AFTER a flag, direction-adjusted so a "good"
+      1. Is the discharge move really bigger than normal? (mean of the
+         horizon return AFTER a flag, direction-adjusted so a "good"
          discharge is positive, vs the same horizon's unconditional
-         baseline distribution)
+         baseline |return| distribution)
       2. On average how many bars after the flag does it happen?
       3. What's the success rate (fraction of flags with any qualifying
          discharge inside the lookout window)?
+
+    DESIGN DECISION (SPEC gives the three QUESTIONS but, unlike 4.8-b's
+    explicit binomial test, no numeric accept/reject formula): 'verified'
+    only if the direction-adjusted mean reversal is bigger than the
+    baseline's mean |return| on EVERY validation horizon (mirrors question
+    1 requiring a real, not marginal, effect) AND success_rate >=
+    params['pressure_min_success_rate'] (default 0.5 -- a flag that
+    resolves via genuine discharge less often than a coin flip isn't a
+    usable signal) AND episode_count >= params['oil_shock_min_samples']
+    (reusing 4.8-b's own minimum-sample convention for the same "is this
+    real" question). Otherwise 'rejected' -- same honesty standard already
+    applied to oil_shock_divergence, not a softer bar for this rule.
 
     DESIGN DECISION (SPEC unspecified): max_lookout_bars for "was there a
     discharge at all" -- params['pressure_discharge_lookout_bars'].
@@ -528,7 +539,7 @@ def backtest_pressure_reversal(
 
     series = compute_pressure_series(gold_candles, dxy_candles, as_of_ts, "XAUUSD@", "M5", params)
     if not series or n < atr_period + 1:
-        return {"episode_count": 0, "answers": {}, "rule_status": "testing"}
+        return {"episode_count": 0, "answers": {}, "rule_status": "rejected"}
 
     gold_closes = np.array([float(c["close"]) for c in gold_aligned])
     gold_highs = np.array([float(c["high"]) for c in gold_aligned])
@@ -605,6 +616,18 @@ def backtest_pressure_reversal(
     success_rate = len(discharged) / len(episode_results) if episode_results else None
     avg_bars_to_discharge = float(np.mean([e["bars_to_discharge"] for e in discharged])) if discharged else None
 
+    min_success_rate = params["pressure_min_success_rate"]
+    min_samples = params["oil_shock_min_samples"]  # reused convention, see docstring
+    bigger_on_every_horizon = bool(answers) and all(
+        answers[h]["bigger_than_baseline"] is True for h in horizons
+    )
+    accepted = (
+        bigger_on_every_horizon
+        and success_rate is not None and success_rate >= min_success_rate
+        and len(episode_results) >= min_samples
+    )
+    rule_status = "verified" if accepted else "rejected"
+
     return {
         "episode_count": len(episode_results),
         "episodes": episode_results,
@@ -613,5 +636,5 @@ def backtest_pressure_reversal(
             "avg_bars_to_discharge": round(avg_bars_to_discharge, 2) if avg_bars_to_discharge is not None else None,
             "success_rate": round(success_rate, 4) if success_rate is not None else None,
         },
-        "rule_status": "testing",  # SPEC gives no numeric accept/reject gate here -- human review decides next step
+        "rule_status": rule_status,
     }
