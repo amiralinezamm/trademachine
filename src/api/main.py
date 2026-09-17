@@ -814,3 +814,126 @@ async def compute_pressure_endpoint(
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
     return await run_in_threadpool(_compute_and_store_pressure_sync, tf, ts)
+
+
+# ---------------------------------------------------------------------------
+# Instrument rollover -- daily automated front-month check (docs/
+# instrument_rollover.md). Pushed from the Windows MT5 box via the SAME
+# restricted candlepush SSH channel already used for XAUUSD@ live candle
+# ingest (scripts/candlepush.sh dispatches on the command verb) -- no new
+# SSH key, no authorized_keys change, no new port. Not internet-facing
+# (candlepush.sh's curl target is 172.18.0.1:8000, same as every other
+# internal-only endpoint in this file).
+# ---------------------------------------------------------------------------
+from src.ingest.rollover import select_front_month, compute_back_adjustment, load_rollover_params
+from src.ingest.instrument_contracts_store import (
+    fetch_active_contract,
+    upsert_instrument_contract,
+    close_contract,
+    insert_rollover_alert,
+    fetch_rollover_alerts,
+)
+
+
+class RolloverCandidate(BaseModel):
+    symbol: str
+    trade_mode: int | None = None
+    volume_window: int
+    latest_close: float | None = None
+
+
+class InstrumentDetection(BaseModel):
+    candidates: list[RolloverCandidate]
+
+
+class RolloverCheckRequest(BaseModel):
+    checked_at: datetime
+    instruments: dict[str, InstrumentDetection]
+
+
+def _process_rollover_check_sync(payload: RolloverCheckRequest) -> dict:
+    """For each instrument in the payload: pick the front-month using the
+    SAME tested pure function as the initial backfill (rollover.
+    select_front_month) -- Windows only collects raw candidate stats, the
+    actual decision lives in one place. If the winner differs from the
+    currently mapped contract, closes the old instrument_contracts row,
+    opens a new one (computing the additive back-adjustment offset from
+    the old/new contract's latest_close, when the old contract is still
+    present in this same candidate snapshot), and inserts a rollover_alerts
+    row for human review. Whitelists logical_symbol against config's
+    instrument_rollover.instruments -- same discipline as the
+    /memory/compute security fix, even though this channel is restricted."""
+    allowed = load_rollover_params()["instruments"]
+    conn = get_connection()
+    results: dict[str, Any] = {}
+    try:
+        for logical_symbol, detection in payload.instruments.items():
+            if logical_symbol not in allowed:
+                results[logical_symbol] = {"status": "rejected", "reason": "not in instrument_rollover.instruments whitelist"}
+                continue
+
+            candidates = [c.model_dump() for c in detection.candidates]
+            winner = select_front_month(candidates)
+            if winner is None:
+                results[logical_symbol] = {"status": "no_qualifying_candidate"}
+                continue
+
+            active = fetch_active_contract(conn, logical_symbol)
+            if active is None:
+                # Shouldn't happen post-backfill, but handle gracefully: first mapping, no offset to compute.
+                upsert_instrument_contract(conn, logical_symbol, winner["symbol"], payload.checked_at, None, 0)
+                conn.commit()
+                results[logical_symbol] = {"status": "first_mapping", "physical_symbol": winner["symbol"]}
+                continue
+
+            if winner["symbol"] == active["physical_symbol"]:
+                results[logical_symbol] = {"status": "no_change", "physical_symbol": winner["symbol"]}
+                continue
+
+            # ROLLOVER DETECTED.
+            old_symbol = active["physical_symbol"]
+            old_candidate = next((c for c in candidates if c["symbol"] == old_symbol), None)
+            offset = 0.0
+            offset_computed = False
+            if old_candidate is not None and old_candidate.get("latest_close") is not None and winner.get("latest_close") is not None:
+                offset = compute_back_adjustment(old_candidate["latest_close"], winner["latest_close"])
+                offset_computed = True
+
+            close_contract(conn, logical_symbol, old_symbol, payload.checked_at)
+            upsert_instrument_contract(conn, logical_symbol, winner["symbol"], payload.checked_at, None, offset)
+            insert_rollover_alert(conn, logical_symbol, old_symbol, winner["symbol"], offset, offset_computed)
+            conn.commit()
+
+            results[logical_symbol] = {
+                "status": "ROLLOVER_DETECTED",
+                "old_physical_symbol": old_symbol,
+                "new_physical_symbol": winner["symbol"],
+                "adjustment_offset": offset,
+                "offset_computed": offset_computed,
+            }
+    finally:
+        conn.close()
+    return {"checked_at": payload.checked_at.isoformat(), "results": results}
+
+
+@app.post("/instruments/rollover-check")
+async def rollover_check_endpoint(payload: RolloverCheckRequest):
+    """Called daily from the Windows MT5 box (Task Scheduler ->
+    scripts/mt5_rollover_check.py -> candlepush SSH channel). See
+    docs/instrument_rollover.md for the full design and
+    src/ingest/rollover.py for the front-month selection mechanism."""
+    result = await run_in_threadpool(_process_rollover_check_sync, payload)
+    return result
+
+
+@app.get("/instruments/rollover-alerts")
+async def get_rollover_alerts(acknowledged: bool | None = Query(None)):
+    """Pending (or all) rollover_alerts rows for human review."""
+    conn = get_connection()
+    try:
+        rows = fetch_rollover_alerts(conn, acknowledged=acknowledged)
+        for r in rows:
+            r["detected_at"] = r["detected_at"].isoformat()
+        return {"alerts": rows}
+    finally:
+        conn.close()

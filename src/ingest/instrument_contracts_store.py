@@ -80,3 +80,37 @@ def close_contract(conn, logical_symbol: str, physical_symbol: str, valid_to_ts:
             """,
             (valid_to_ts, logical_symbol, physical_symbol),
         )
+
+
+def insert_rollover_alert(
+    conn,
+    logical_symbol: str,
+    old_physical_symbol: str | None,
+    new_physical_symbol: str,
+    adjustment_offset: float | None,
+    offset_computed: bool,
+) -> None:
+    """One row per detected front-month change, for human review (docs/
+    instrument_rollover.md's daily automated check). Never auto-deleted."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO rollover_alerts
+                (logical_symbol, old_physical_symbol, new_physical_symbol, adjustment_offset, offset_computed)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (logical_symbol, old_physical_symbol, new_physical_symbol, adjustment_offset, offset_computed),
+        )
+
+
+def fetch_rollover_alerts(conn, acknowledged: bool | None = None) -> list[dict[str, Any]]:
+    query = "SELECT id, logical_symbol, old_physical_symbol, new_physical_symbol, adjustment_offset, offset_computed, detected_at, acknowledged FROM rollover_alerts"
+    params: tuple = ()
+    if acknowledged is not None:
+        query += " WHERE acknowledged = %s"
+        params = (acknowledged,)
+    query += " ORDER BY detected_at DESC"
+    with conn.cursor() as cur:
+        cur.execute(query, params)
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]

@@ -9,9 +9,19 @@ splicing (initial backfill today, live rollover detection later).
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import yaml
+
+PARAMS_PATH = Path(__file__).resolve().parents[2] / "config" / "params.yaml"
+
 SYMBOL_TRADE_MODE_DISABLED = 0
+
+
+def load_rollover_params(path: Path = PARAMS_PATH) -> dict[str, Any]:
+    with open(path) as f:
+        return yaml.safe_load(f)["instrument_rollover"]
 
 
 def select_front_month(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:

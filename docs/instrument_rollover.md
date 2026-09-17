@@ -224,3 +224,77 @@ Still not implemented: the correlation module itself (SPEC.md 4.8) that
 would actually *use* these three instruments, and live/scheduled rollover
 re-detection (today's mapping was a one-time manual run; nothing re-checks
 `trade_mode`/volume on a schedule yet).
+
+---
+
+## 7. Daily automated rollover-timing check -- IMPLEMENTED (2026-09-18)
+
+The one-time manual detection in §3/§6 is now a daily job. Architecture:
+
+```
+Windows (Task Scheduler, daily 06:00 local = ~13:00 UTC currently)
+  -> C:\xauusd-bot\run_rollover_check.bat
+     -> mt5_rollover_check.py (MetaTrader5 API: collect raw candidate
+        stats ONLY -- symbol, trade_mode, 3-day tick_volume, latest_close
+        for every symbol matching each instrument's pattern; makes NO
+        decision itself)
+     -> pushed via the SAME restricted SSH channel already used for
+        live XAUUSD@ candle ingest every 5 min (candlepush_ed25519 key,
+        forced command= in Ubuntu's authorized_keys) -- extended
+        scripts/candlepush.sh to dispatch on the command verb
+        (send_candles vs send_rollover_check) instead of assuming
+        send_candles always. NO new SSH key, NO authorized_keys change,
+        NO new port.
+  -> Ubuntu: POST /instruments/rollover-check
+     -> whitelists logical_symbol against config's
+        instrument_rollover.instruments (same discipline as the
+        /memory/compute security fix)
+     -> decision made by the ONE tested code path,
+        src/ingest/rollover.select_front_month() -- same function the
+        original backfill used, not a second copy
+     -> if winner == currently mapped contract: no-op, logged as
+        "no_change"
+     -> if different (a real rollover): computes the additive
+        back-adjustment offset FROM THIS SAME SNAPSHOT (old contract's
+        latest_close vs new contract's latest_close, if the old contract
+        is still present in the candidate list -- if not, offset is left
+        0 and explicitly flagged offset_computed=False rather than
+        guessed), closes the old instrument_contracts row, opens a new
+        one, and inserts a rollover_alerts row for human review
+```
+
+**Scope boundary (deliberate, not an oversight):** a detected rollover
+updates the `instrument_contracts` mapping and records the offset, but
+does **not** automatically re-extract the new contract's full history or
+retroactively rewrite already-stored `candles` rows with the offset. Two
+reasons: (1) the framing in this task explicitly called a rollover "a
+structural change to historical data for every dependent module" --
+that's exactly the kind of thing this project's own principle (never
+physically delete/modify historical rows, CLAUDE.md 4.2) argues against
+doing silently and automatically; (2) `apply_back_adjustment()` already
+exists as a pure, tested function (`src/ingest/rollover.py`) that any
+consumer needing a continuous adjusted series can call at read-time using
+the stored `adjustment_offset` -- raw per-contract prices stay untouched
+and always available for a real backtest. A human reviewing a
+`rollover_alerts` row can run the existing `mt5_rollover_extract.py` +
+`load_rollover_candles.py` pair manually to bring `candles` current for
+the new contract, same as the original backfill.
+
+**DB:** new `rollover_alerts` table (never auto-deleted; `acknowledged`
+flag for human review tracking).
+
+**API:** `POST /instruments/rollover-check` (called only from the
+Windows box via the restricted channel above -- not meant for direct use),
+`GET /instruments/rollover-alerts` (human-readable, for checking pending
+alerts).
+
+**Live-verified end-to-end 2026-09-18:** ran the Windows script both
+directly and via `Start-ScheduledTask` (`LastTaskResult=0`) -- all three
+instruments correctly reported `no_change` (nothing has actually rolled
+over since yesterday's backfill, as expected).
+
+**Tests:** `tests/api/test_rollover_check_endpoint.py` (7 tests) covers
+the decision logic -- no-change, rollover-with-offset,
+rollover-without-offset (old contract missing, must not guess),
+unknown-symbol rejection, no-qualifying-candidate, first-mapping. Full
+suite: 118 passed.
