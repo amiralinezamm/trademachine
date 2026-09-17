@@ -197,3 +197,45 @@ memory:
   top_n: 50
   ci_level: 0.95
   n_bootstrap: 1000
+
+correlation:
+  # SPEC.md 4.8. Fixed pairs only: 4.8-a/c = XAUUSD@ vs DXY@, 4.8-b = XAUUSD@
+  # vs BRENT@. T10Y@ intentionally not used yet (separate open decision).
+  atr_period: 14
+
+  # 4.8-a: rolling dollar correlation. SPEC.md explicit.
+  dollar_corr_window: 200
+
+  # 4.8-b: oil shock.
+  oil_shock_return_bars: 3       # SPEC.md explicit
+  oil_shock_atr_mult: 2.5        # SPEC.md explicit
+  oil_shock_forward_bars: 6      # SPEC.md explicit
+  oil_shock_lag_range: 6         # SPEC.md explicit (lags -6..+6)
+  # DESIGN DECISION: SPEC gives the binomial-test METHOD but not a
+  # significance threshold. Standard alpha=0.05.
+  oil_shock_significance_alpha: 0.05
+  # DESIGN DECISION: SPEC gives no minimum-sample rule for this test (unlike
+  # gaps' explicit ">30" in SPEC.md 4.5). Reusing that same convention here
+  # for the same "is this real, not noise" question.
+  oil_shock_min_samples: 30
+
+  # 4.8-c: accumulated pressure + discharge.
+  # DESIGN DECISION: SPEC says "رگرسیون بازده طلا روی بازده دلار (پنجره
+  # متحرک)" without a window length. Reusing 4.8-a's own explicit
+  # 200-candle window for the identical gold/dollar relationship rather
+  # than inventing an unrelated number.
+  pressure_regression_window: 200
+  pressure_sum_window: 48          # SPEC.md explicit
+  # DESIGN DECISION: SPEC says pressure is "نرمال‌شده به z" without
+  # specifying the lookback for that normalization's own mean/std. Matching
+  # regime.py's own bb_width_pct_window precedent (a generous rolling
+  # baseline for a percentile/z-type normalization).
+  pressure_z_window: 500
+  pressure_flag_threshold: 2.0     # SPEC.md explicit
+  pressure_flag_min_bars: 12       # SPEC.md explicit
+  pressure_discharge_atr_mult: 2.0 # SPEC.md explicit
+  # DESIGN DECISION: SPEC does not say how far forward to search before
+  # concluding "no discharge happened" for a given flag. Chosen as 2x the
+  # pressure_sum_window (a round, documented guess, not hidden).
+  pressure_discharge_lookout_bars: 96
+  pressure_validation_horizons: [12, 24]  # SPEC.md explicit

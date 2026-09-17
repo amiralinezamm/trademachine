@@ -645,3 +645,172 @@ async def get_memory_result(
         return row
     finally:
         conn.close()
+
+# ---------------------------------------------------------------------------
+# Correlation (SPEC.md 4.8) -- fixed pairs only, no free-form `symbol` param.
+# 4.8-a/c: XAUUSD@ vs DXY@.  4.8-b: XAUUSD@ vs BRENT@.  T10Y@ not used yet
+# (open decision). No whitelist needed here (unlike /memory/compute) because
+# these endpoints never accept an instrument name as input at all -- the
+# pair is fixed in code, matching SPEC.md's own fixed pairing.
+# ---------------------------------------------------------------------------
+from src.features.correlation import (
+    compute_dollar_correlation,
+    compute_oil_shock_events,
+    backtest_oil_shock_divergence,
+    compute_pressure_series,
+    backtest_pressure_reversal,
+    load_correlation_params,
+)
+from src.features.correlation_store import (
+    fetch_candles as fetch_candles_corr,
+    upsert_dollar_correlation,
+    fetch_latest_dollar_correlation,
+    upsert_oil_shock_events,
+    store_oil_shock_backtest,
+    upsert_pressure_snapshots,
+    upsert_pressure_episodes,
+    store_pressure_reversal_backtest,
+)
+
+GOLD_SYMBOL = "XAUUSD@"
+DXY_SYMBOL = "DXY@"
+BRENT_SYMBOL = "BRENT@"
+
+
+def _compute_and_store_dollar_correlation_sync(tf: str, ts: datetime) -> dict:
+    conn = get_connection()
+    try:
+        gold = fetch_candles_corr(conn, GOLD_SYMBOL, tf, ts)
+        dxy = fetch_candles_corr(conn, DXY_SYMBOL, tf, ts)
+        rows = compute_dollar_correlation(gold, dxy, ts, GOLD_SYMBOL, tf)
+        result = upsert_dollar_correlation(conn, rows)
+        conn.commit()
+        return {
+            "pair": f"{GOLD_SYMBOL}/{DXY_SYMBOL}", "tf": tf, "as_of": ts.isoformat(),
+            "gold_candle_count": len(gold), "dxy_candle_count": len(dxy),
+            "row_count": len(rows),
+            "latest_correlation": rows[-1]["correlation"] if rows else None,
+            **result,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/correlation/dollar/compute")
+async def compute_dollar_correlation_endpoint(
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """SPEC.md 4.8-a. Rolling dollar_corr_window-bar correlation between
+    XAUUSD@ and DXY@ returns; the correlation value itself is the feature."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return await run_in_threadpool(_compute_and_store_dollar_correlation_sync, tf, ts)
+
+
+@app.get("/correlation/dollar/latest")
+async def get_latest_dollar_correlation(
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    conn = get_connection()
+    try:
+        row = fetch_latest_dollar_correlation(conn, GOLD_SYMBOL, tf, ts)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No correlation value found at or before as_of")
+        row["ts_utc"] = row["ts_utc"].isoformat()
+        return row
+    finally:
+        conn.close()
+
+
+def _compute_and_store_oil_shock_sync(tf: str, ts: datetime) -> dict:
+    conn = get_connection()
+    try:
+        gold = fetch_candles_corr(conn, GOLD_SYMBOL, tf, ts)
+        oil = fetch_candles_corr(conn, BRENT_SYMBOL, tf, ts)
+        events = compute_oil_shock_events(gold, oil, ts, GOLD_SYMBOL, tf)
+        write_result = upsert_oil_shock_events(conn, events)
+        bt = backtest_oil_shock_divergence(gold, oil, ts)
+        store_oil_shock_backtest(conn, bt)
+        conn.commit()
+        return {
+            "pair": f"{GOLD_SYMBOL}/{BRENT_SYMBOL}", "tf": tf, "as_of": ts.isoformat(),
+            "gold_candle_count": len(gold), "oil_candle_count": len(oil),
+            "event_count": len(events),
+            "backtest": bt,
+            **write_result,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/correlation/oil-shock/compute")
+async def compute_oil_shock_endpoint(
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """SPEC.md 4.8-b. Detects oil shocks (XAUUSD@ vs BRENT@), stores events,
+    runs the reversal-rate binomial significance test + lag cross-correlation,
+    and registers oil_shock_divergence in `rules` as verified/rejected per
+    SPEC.md's explicit instruction."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return await run_in_threadpool(_compute_and_store_oil_shock_sync, tf, ts)
+
+
+def _compute_and_store_pressure_sync(tf: str, ts: datetime) -> dict:
+    conn = get_connection()
+    try:
+        gold = fetch_candles_corr(conn, GOLD_SYMBOL, tf, ts)
+        dxy = fetch_candles_corr(conn, DXY_SYMBOL, tf, ts)
+        series = compute_pressure_series(gold, dxy, ts, GOLD_SYMBOL, tf)
+        write_result = upsert_pressure_snapshots(conn, series)
+        bt = backtest_pressure_reversal(gold, dxy, ts)
+        episodes_written = upsert_pressure_episodes(conn, GOLD_SYMBOL, tf, bt.get("episodes", []))
+        store_pressure_reversal_backtest(conn, bt)
+        conn.commit()
+        flagged_count = sum(1 for row in series if row["flagged"])
+        return {
+            "pair": f"{GOLD_SYMBOL}/{DXY_SYMBOL}", "tf": tf, "as_of": ts.isoformat(),
+            "snapshot_count": len(series), "flagged_count": flagged_count,
+            "episode_count": bt["episode_count"],
+            "answers": bt["answers"],
+            **write_result,
+            "episodes_upserted": episodes_written["upserted"],
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/correlation/pressure/compute")
+async def compute_pressure_endpoint(
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """SPEC.md 4.8-c. Rolling regression residual -> accumulated pressure ->
+    flag/discharge episodes (XAUUSD@ vs DXY@), stores the time series +
+    episodes, and registers pressure_reversal in `rules` as 'testing'
+    (SPEC gives no numeric accept/reject gate here, only three questions
+    to answer -- see src/features/correlation.py docstring)."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return await run_in_threadpool(_compute_and_store_pressure_sync, tf, ts)
