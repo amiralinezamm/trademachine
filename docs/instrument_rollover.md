@@ -1,10 +1,12 @@
 # Instrument rollover — design doc (correlation module 4.8 prerequisite)
 
-**Status: DRAFT — rollover-timing detection section is BLOCKED, see §3.** Written
-2026-09-17 from live `MetaTrader5` queries against the WM Markets terminal
-(`xauusd-bot-windows`, `C:\Program Files\WM Markets MT5 Terminal\terminal64.exe`).
-No code written yet — architecture only, per PM-RULES.md golden rule (stop and
-ask when the SPEC/assumption doesn't hold, don't guess).
+**Status: DESIGN RESOLVED (2026-09-17) — mechanism decided by user, live-tested
+against all three instruments, see §3.** Written from live `MetaTrader5`
+queries against the WM Markets terminal (`xauusd-bot-windows`,
+`C:\Program Files\WM Markets MT5 Terminal\terminal64.exe`). Still **no
+production code, no backfill** — this is architecture + a manual detection
+script run once for verification, per instruction (implementation waits for
+final go-ahead after this report).
 
 ---
 
@@ -40,59 +42,88 @@ the same CME month-code suffix convention. The plan in the previous message
 ("USINDX ندارد چون spot index است نه فیوچرز") does not hold — it needs the
 same rollover treatment as `10TBILL.*` and `UKBRENT.*`, not an exemption.
 
-**2.2 — Oil: confirmed `UKBRENT.*` is not the only option.** Beyond the
-3-month futures family you already knew about (X26/Z26/F27), the broker also
-lists **`BRENTCASH`** and **`WTICASH`** — spot/cash CFDs with no real
-expiration (the `2030-01-01` in `expiration_time` is a platform placeholder,
-not a contract date; confirmed by checking `start_time` too, which is
-2016-03-2016-04 for these — clearly an "always open" instrument, not a
-dated contract). **These need no rollover logic at all.** Worth a decision:
-oil correlation could use `BRENTCASH` directly and skip the entire rollover
-problem for that one leg, at the cost of it being a broker CFD price rather
-than the literal ICE Brent front-month print. Your call — not assuming this.
+**2.2 — Oil: `BRENTCASH`/`WTICASH` evaluated and rejected (2026-09-17).**
+Beyond the 3-month `UKBRENT.*` futures family, the broker also lists
+`BRENTCASH` and `WTICASH` — spot/cash CFDs needing no rollover at all (the
+`2030-01-01` in their `expiration_time` is a platform placeholder, not a
+contract date). These were considered as a way to skip the rollover problem
+entirely for oil, but **rejected**: the user's manual test on the broker
+platform showed `UKBRENT` tracks the real Brent price with higher accuracy
+than `BRENTCASH`, which is presumed to be a synthetic price with more
+tracking error — undesirable for the correlation module (4.8-b), which is
+sensitive to the precision of price-shock timing/size. **Decision: oil uses
+`UKBRENT.*` through the same rollover mechanism as the other two
+instruments — not exempted, not spot.** `BRENTCASH`/`WTICASH` are recorded
+here for the historical record, not deleted from consideration silently.
 
 ---
 
-## 3. BLOCKED — rollover-timing detection cannot use `expiration_time` as designed
+## 3. Rollover-timing mechanism — RESOLVED (user decision, 2026-09-17)
 
-The message asked for detection "بر مبنای expiration_time واقعی از MT5" with
-a 5–8 business day buffer. **Checked `expiration_time` on all 7 futures-family
-symbols above (`USINDX.*`, `10TBILL.*`, `UKBRENT.*`): every single one reads
-`0`.** This broker does not populate that MT5 field for these CFD-wrapped
-futures products (unlike `BRENTCASH`/`WTICASH`, which at least carry a — non-
-real — placeholder). There is no `symbol_info` field carrying a real
-settlement/expiry date for any of these three instruments on this broker.
+`expiration_time` is unavailable (reads `0`) for all 7 futures-family
+symbols on this broker (§2 finding, unchanged) — the originally-requested
+"buffer before real expiration_time" mechanism has no data source here. User
+decision: use a two-stage mechanism, generic across all three instruments
+(same pipeline, no per-instrument special-casing):
 
-This is exactly the "SPEC/plan doesn't hold" case PM-RULES.md says to stop
-on rather than substitute a guess. Two things point toward *a* front-month
-signal without expiration_time, but neither is the clean mechanism you asked
-for, and I'm not picking one without your input:
+1. **Disqualification signal:** drop any candidate contract whose
+   `symbol_info().trade_mode == 0` (`SYMBOL_TRADE_MODE_DISABLED`).
+2. **Primary signal (tie-break among survivors):** among the remaining
+   candidates, pick the one with the higher summed `tick_volume` over the
+   last 3 D1 bars (`mt5.copy_rates_from_pos(sym, TIMEFRAME_D1, 0, 3)`).
 
-- **`trade_mode`** does distinguish cleanly for Brent (X26=FULL / Z26,F27=
-  DISABLED — unambiguous), but **not** for the T-Note (U26=DISABLED yet still
-  quoting live with full volume; Z26=CLOSEONLY, neither is FULL). If DISABLED
-  can mean either "expiring, wind-down only" (U26's case) or "not yet
-  activated" (UKBRENT.Z26's case), `trade_mode` alone can't tell those apart.
-- **Live-tick presence + volume trend** (checked: U26 volume ≈ Z26 volume,
-  both actively quoting right now) doesn't cleanly signal an approaching
-  T-Note rollover either.
+Logical-name mapping (§4): `DXY@` → `USINDX.*`, `T10Y@` → `10TBILL.*`,
+`BRENT@` → `UKBRENT.*` — the active contract for each is whatever this
+two-stage rule currently selects.
 
-**Question for you:** how do you want front-month/rollover-timing determined,
-given MT5's `expiration_time` is unavailable for these three instruments?
-Options I see, no preference implied:
-1. Use `trade_mode` transitions as the live trigger (works for Brent, needs a
-   tie-break rule for T-Note — e.g. "if both are non-FULL, prefer the one
-   with fresher/higher tick_volume").
-2. Fall back to parsing the month code from the symbol name against a fixed
-   CME/ICE calendar rule for each instrument's real last-trading-day
-   convention (this is the "پارس‌کردن حرف از نام" approach you explicitly
-   said not to use — flagging it only because it's the remaining option, not
-   proposing it).
-3. Something else — e.g. ask the broker/account manager whether they expose
-   a rollover-date list elsewhere (contract specification page, not the API).
+### Live verification run (2026-09-17, all three instruments)
 
-Nothing below this line is implemented; §4–5 describe the parts of the design
-that don't depend on this open question.
+Ran the mechanism above as a one-off script against the live MT5 terminal —
+no candles written, no DB touched, detection logic only:
+
+```
+=== USINDX (DXY@) ===
+  USINDX.U26: trade_mode=DISABLED(0)  3day_volume=5572    -> DISQUALIFIED
+  USINDX.Z26: trade_mode=FULL(4)      3day_volume=208712  -> candidate
+  RESULT: front-month = USINDX.Z26  (only one non-disabled candidate)
+
+=== 10TBILL (T10Y@) ===
+  10TBILL.U26: trade_mode=DISABLED(0)   3day_volume=8715  -> DISQUALIFIED
+  10TBILL.Z26: trade_mode=CLOSEONLY(3)  3day_volume=9545  -> candidate
+  RESULT: front-month = 10TBILL.Z26  (only one non-disabled candidate)
+
+=== UKBRENT (BRENT@) ===
+  UKBRENT.X26: trade_mode=FULL(4)     3day_volume=184813  -> candidate
+  UKBRENT.Z26: trade_mode=DISABLED(0) 3day_volume=173993  -> DISQUALIFIED
+  UKBRENT.F27: trade_mode=DISABLED(0) 3day_volume=0       -> DISQUALIFIED
+  RESULT: front-month = UKBRENT.X26  (only one non-disabled candidate)
+```
+
+| logical symbol | selected active contract | how it won |
+|---|---|---|
+| `DXY@` | `USINDX.Z26` | sole survivor after disqualification |
+| `T10Y@` | `10TBILL.Z26` | sole survivor after disqualification |
+| `BRENT@` | `UKBRENT.X26` | sole survivor after disqualification |
+
+**Honest caveat, not hidden:** the 3-day-volume tie-break never actually
+engaged today — in all three cases exactly one candidate survived the
+`trade_mode` filter, so the mechanism reduces to "pick the only non-DISABLED
+contract" right now. The tie-break logic is still needed for when two
+candidates are simultaneously non-DISABLED (expected during an actual
+rollover window, when the old and new contract briefly overlap) — today's
+run just didn't exercise that branch.
+
+**Second caveat:** `10TBILL.Z26` — today's selected T-Note contract — itself
+has `trade_mode=CLOSEONLY`, not `FULL`. It survived only because it isn't
+`DISABLED`; it is still not open for new orders at the broker right now. If
+that matters for how `correlation.py` or anything else treats this
+instrument (e.g. should a CLOSEONLY-but-selected contract's price still be
+trusted for feature computation even though no new position could be opened
+on it), that's worth a decision before implementation — flagging it now
+rather than assuming it's fine.
+
+§4–5 (symbol abstraction, back-adjustment) are unchanged and already
+consistent with this mechanism.
 
 ---
 
@@ -158,5 +189,7 @@ run over the synthetic instrument) uses the adjusted one.
 
 ## 6. Next step
 
-Waiting on your decision for §3 before writing any code — no rollover
-implementation, no backfill started, per your instruction.
+Design is now complete end-to-end (§3–5) and live-verified for all three
+instruments (§3). Still no rollover implementation and no backfill started —
+waiting on your go-ahead, plus a decision on the `10TBILL.Z26`/CLOSEONLY
+caveat in §3 if it matters to you.
