@@ -1,12 +1,8 @@
 # Instrument rollover — design doc (correlation module 4.8 prerequisite)
 
-**Status: DESIGN RESOLVED (2026-09-17) — mechanism decided by user, live-tested
-against all three instruments, see §3.** Written from live `MetaTrader5`
-queries against the WM Markets terminal (`xauusd-bot-windows`,
-`C:\Program Files\WM Markets MT5 Terminal\terminal64.exe`). Still **no
-production code, no backfill** — this is architecture + a manual detection
-script run once for verification, per instruction (implementation waits for
-final go-ahead after this report).
+**Status: IMPLEMENTED AND BACKFILLED (2026-09-17) — see §6.** Written from
+live `MetaTrader5` queries against the WM Markets terminal
+(`xauusd-bot-windows`, `C:\Program Files\WM Markets MT5 Terminal\terminal64.exe`).
 
 ---
 
@@ -187,9 +183,44 @@ run over the synthetic instrument) uses the adjusted one.
 
 ---
 
-## 6. Next step
+## 6. Implementation status — DONE (2026-09-17)
 
-Design is now complete end-to-end (§3–5) and live-verified for all three
-instruments (§3). Still no rollover implementation and no backfill started —
-waiting on your go-ahead, plus a decision on the `10TBILL.Z26`/CLOSEONLY
-caveat in §3 if it matters to you.
+Backfilled and live in `candles` under the logical symbols. Summary (3-year
+window, matching `mt5_bridge.backfill_years`, same as `XAUUSD@`):
+
+| logical symbol | physical contract | M1 | M5 | M15 | H1 | range |
+|---|---|---|---|---|---|---|
+| `DXY@` | USINDX.Z26 | 954,979 | 191,101 | 64,164 | 16,049 | 2023-09-18 .. 2026-09-17 |
+| `T10Y@` | 10TBILL.Z26 | 543,036 | 174,743 | 66,040 | 17,205 | 2023-09-18 .. 2026-09-17 |
+| `BRENT@` | UKBRENT.X26 | 983,142 | 200,787 | 67,140 | 16,810 | 2023-09-18 .. 2026-09-17 |
+
+`instrument_contracts` (one row per logical symbol, not per timeframe —
+"which physical contract is mapped" is one fact, independent of which
+timeframe you query): all three `valid_to_ts IS NULL` (still the active
+mapped contract), `adjustment_offset = 0` (nothing to splice against yet —
+this is each instrument's first backfill).
+
+Code: `src/ingest/rollover.py` (pure, 10 tests), `src/ingest/
+instrument_contracts_store.py`, `src/ingest/mt5_rollover_extract.py`
+(Windows-side), `src/ingest/load_rollover_candles.py` (Ubuntu-side loader).
+Full test suite: 99 passed.
+
+**Symbol-whitelist audit (per user instruction before implementation):**
+grepped `src/api/main.py` for the whitelist pattern used in the
+`/memory/compute` security fix (commit `dbbca43`) — it is the **only**
+endpoint in the entire file with an actual symbol whitelist. Every other
+endpoint (`/levels/compute`, `/round_numbers/compute`, `/gaps/*`,
+`/fibonacci/*`, `/regime/*`, `/signal/latest`, `/memory/result`) accepts
+`symbol` as an unwhitelisted free string and is semantically XAUUSD@-only
+(support/resistance, patterns-on-levels, gaps, fibonacci-on-levels, round
+numbers, regime, memory — none of them are about DXY/T10Y/BRENT). No
+correlation-module endpoint exists yet to update. **Conclusion: zero
+endpoints changed.** `/memory/compute`'s whitelist correctly stays
+XAUUSD@-only (SPEC.md 4.10 scopes Matrix Profile memory search to gold).
+This will need revisiting once SPEC.md 4.8 (`correlation`) actually gets an
+API endpoint — flagging for that future work, not implemented now.
+
+Still not implemented: the correlation module itself (SPEC.md 4.8) that
+would actually *use* these three instruments, and live/scheduled rollover
+re-detection (today's mapping was a one-time manual run; nothing re-checks
+`trade_mode`/volume on a schedule yet).

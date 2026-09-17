@@ -51,6 +51,29 @@ mt5_bridge:
     dst_start_rule: "2nd_sunday_march"
     dst_end_rule: "last_sunday_october"
 
+# docs/instrument_rollover.md — correlation module (SPEC.md 4.8) prerequisite.
+# Logical instrument -> broker contract-family pattern. compute_levels() etc.
+# never see the physical contract name; candles are stored under the LOGICAL
+# symbol below, and instrument_contracts (DB) tracks which physical contract
+# is currently mapped to it.
+#
+# Front-month detection (decided 2026-09-17, live-verified against all three
+# in docs/instrument_rollover.md): among symbols matching `pattern`, drop any
+# with trade_mode == 0 (DISABLED), then pick the highest summed tick_volume
+# over the last `volume_window_days` D1 bars among the survivors.
+instrument_rollover:
+  volume_window_days: 3
+  instruments:
+    DXY@:
+      pattern: "USINDX.*"
+      description: "US Dollar Index (broker CFD-futures family)"
+    T10Y@:
+      pattern: "10TBILL.*"
+      description: "US 10 Year T-Note (broker CFD-futures family)"
+    BRENT@:
+      pattern: "UKBRENT.*"
+      description: "UK Brent Crude Oil (broker CFD-futures family) — BRENTCASH/WTICASH evaluated and rejected, see docs/instrument_rollover.md 2.2"
+
 levels:
   # SPEC.md 4.2. Only M5 has explicit parameters in SPEC.md (N=5, k=1.0),
   # and D2 names M5 the base analysis timeframe — so only M5 is run here.
