@@ -2,7 +2,7 @@
   "id": "xauusdNewsCalendarIngest01",
   "name": "XAUUSD News Calendar Ingest",
   "description": "SPEC.md §4.7: pull ForexFactory thisweek XML every 6 hours and upsert into news_events. Separate from the 5-minute per-module pipeline — news has its own cadence.",
-  "active": false,
+  "active": true,
   "nodes": [
     {
       "parameters": {
@@ -19,20 +19,28 @@
       "name": "Every 6 hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [-400, 0]
+      "position": [
+        -400,
+        0
+      ]
     },
     {
       "parameters": {
         "method": "POST",
         "url": "http://172.18.0.1:8000/news/calendar/ingest",
-        "options": { "timeout": 30000 }
+        "options": {
+          "timeout": 30000
+        }
       },
       "id": "node-news-ingest-001",
       "name": "news/calendar/ingest",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "continueOnFail": true,
-      "position": [-100, 0]
+      "position": [
+        -100,
+        0
+      ]
     },
     {
       "parameters": {
@@ -62,7 +70,10 @@
       "name": "Error?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [160, 0]
+      "position": [
+        160,
+        0
+      ]
     },
     {
       "parameters": {
@@ -74,7 +85,10 @@
       "name": "Alert on failure",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [420, -120],
+      "position": [
+        420,
+        -120
+      ],
       "credentials": {
         "telegramApi": {
           "id": "xauusdBotTelegramCred01",
@@ -85,14 +99,36 @@
   ],
   "connections": {
     "Every 6 hours": {
-      "main": [[{ "node": "news/calendar/ingest", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "news/calendar/ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "news/calendar/ingest": {
-      "main": [[{ "node": "Error?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Error?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Error?": {
       "main": [
-        [{ "node": "Alert on failure", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "Alert on failure",
+            "type": "main",
+            "index": 0
+          }
+        ],
         []
       ]
     }
