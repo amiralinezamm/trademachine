@@ -1,2 +1,41 @@
-# Trading costs (spread, commission, slippage assumptions) for backtest/engine.
-# Placeholder — to be filled in per SPEC.md.
+# Trading costs — backtest and live engine (SPEC.md 4.14)
+# Values confirmed by user (2026-09-18):
+#   commission: 0.0 (no separate commission, spread-only account)
+#   newyork fallback: 0.30 USD/oz confirmed by user directly
+
+spread:
+  source: real          # use candles.spread column first
+
+  # ── Spread unit note ──────────────────────────────────────────────────────
+  # The DB stores spread as an integer (MT5 broker "points").
+  # Conversion: spread_usd = spread_int * point_size
+  # point_size for XAUUSD@ on WM Markets is NOT yet confirmed.
+  # Until confirmed, the engine uses fallback values below.
+  # TODO: confirm point_size with broker and set spread.source = real.
+  # ──────────────────────────────────────────────────────────────────────────
+  point_size: null       # null = unknown → always use fallback
+
+  fallback_by_session:
+    newyork:  0.30       # USD/oz — confirmed directly by user
+    london:   0.32       # SPEC 4.14
+    tokyo:    0.45       # SPEC 4.14
+    rollover: 1.20       # SPEC 4.14 — hour of daily rollover
+
+slippage:
+  base:         0.10     # USD/oz — SPEC 4.14
+  news_window:  0.40     # USD/oz — during SPEC 4.7 blackout window
+
+swap:
+  enabled: false         # account has no swap up to 15 days (confirmed)
+
+commission: 0.0          # broker charges via spread only (confirmed by user)
+
+# ── Backtest execution parameters ──────────────────────────────────────────
+# IMPORTANT: sl_atr_mult and tp_atr_mult match the live n8n Telegram message
+# (SL = entry ± 2×ATR, TP = entry ± 3×ATR). Confirm before first run.
+# timeout_bars: ??? — SPEC does not specify. Must be confirmed by user.
+backtest:
+  sl_atr_mult:    2.0    # SL = entry ± sl_atr_mult × ATR
+  tp_atr_mult:    3.0    # TP = entry ± tp_atr_mult × ATR
+  timeout_bars:   null   # ← MUST SET before running (ask user: 12/24/48?)
+  rule_version_suffix: ""  # appended to rule_version for backtest runs; "" = same as live
