@@ -211,6 +211,17 @@ def _check_signal_sync(symbol: str, tf: str) -> dict:
         if signal is None:
             return {"signal": None, "as_of": candle["ts_utc"].isoformat()}
 
+        # Enrich components with all module outputs before storing
+        # (SPEC.md 4.14 — components jsonb must include all signal contributors).
+        # fetch_db_context() is pure-logic separated: build_context() inside it
+        # re-applies as_of_ts filter on every list so no future data can leak in.
+        from src.engine.signal_context import fetch_db_context
+        ctx = fetch_db_context(
+            conn, symbol, tf, candle["ts_utc"],
+            float(candle["close"]), atr,
+        )
+        signal["components"].update(ctx)
+
         signal_id = insert_signal(conn, signal)
         conn.commit()
         if signal_id is None:
