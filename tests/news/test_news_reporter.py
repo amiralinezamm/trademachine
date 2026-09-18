@@ -15,7 +15,7 @@ from src.news.news_reporter import (
 )
 
 UTC = timezone.utc
-T0 = datetime(2026, 9, 26, 12, 30, tzinfo=UTC)  # Friday 12:30 UTC = 17:00 IRDT
+T0 = datetime(2026, 9, 26, 12, 30, tzinfo=UTC)  # Friday 12:30 UTC = 16:00 IRST (DST abolished Sep 2022)
 
 
 # ---------------------------------------------------------------------------
@@ -68,14 +68,14 @@ def test_intensity_message_includes_range_values():
 # _to_tehran_hhmm
 # ---------------------------------------------------------------------------
 
-def test_tehran_offset_summer_irdt():
-    """UTC+4:30 in summer (April–September). 12:30 UTC → 17:00 IRDT."""
+def test_tehran_always_irst_no_dst():
+    """Iran abolished DST permanently Sep 2022. UTC+3:30 all year. 12:30 UTC → 16:00 IRST."""
     dt = datetime(2026, 9, 26, 12, 30, tzinfo=UTC)
-    assert _to_tehran_hhmm(dt) == "17:00"
+    assert _to_tehran_hhmm(dt) == "16:00"
 
 
-def test_tehran_offset_winter_irst():
-    """UTC+3:30 in winter (October–March). 12:30 UTC → 16:00 IRST."""
+def test_tehran_irst_winter():
+    """UTC+3:30 year-round since Sep 2022. 12:30 UTC → 16:00 IRST."""
     dt = datetime(2026, 12, 5, 12, 30, tzinfo=UTC)
     assert _to_tehran_hhmm(dt) == "16:00"
 
@@ -190,7 +190,7 @@ def test_release_message_price_move_shown():
 
 
 def test_release_message_blackout_shown_in_tehran_time():
-    blackout_end = datetime(2026, 9, 26, 12, 45, tzinfo=UTC)  # 17:15 IRDT
+    blackout_end = datetime(2026, 9, 26, 12, 45, tzinfo=UTC)  # 16:15 IRST (DST abolished)
     msg = build_release_message(
         event=_event(), actual="280K",
         surprise_result=_surprise_result(),
@@ -198,7 +198,7 @@ def test_release_message_blackout_shown_in_tehran_time():
         price_move=None,
         blackout_end=blackout_end,
     )
-    assert "17:15" in msg
+    assert "16:15" in msg
     assert "مسدود" in msg
 
 
@@ -247,7 +247,7 @@ def test_upcoming_message_contains_title_and_time():
     surprise = {"gold_sign": -1, "mapped": True}
     msg = build_upcoming_message(event=_event(), surprise_result=surprise)
     assert "Non-Farm Employment Change" in msg
-    assert "17:00" in msg  # T0 = 12:30 UTC = 17:00 IRDT
+    assert "16:00" in msg  # T0 = 12:30 UTC = 16:00 IRST (DST abolished Sep 2022)
 
 
 def test_upcoming_message_shows_expected_direction():

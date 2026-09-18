@@ -108,21 +108,13 @@ def build_upcoming_message(event: dict[str, Any], surprise_result: dict[str, Any
 
 
 def _to_tehran_hhmm(dt: datetime) -> str:
-    """Convert UTC datetime to Tehran time (IRST = UTC+3:30, IRDT = UTC+4:30).
-    Uses fixed offsets to avoid pytz dependency; DST boundary is last Friday of March.
-    For display only — do NOT use for any time arithmetic.
+    """UTC datetime → Tehran local time string (HH:MM).
+    Iran permanently abolished DST on 22 Sep 2022 — UTC+3:30 all year.
+    Uses zoneinfo (stdlib) so any future policy change is handled by tzdata, not hardcoded math.
+    For display only — do NOT use for time arithmetic.
     """
-    from datetime import timedelta
-    # Iran switches to IRDT (UTC+4:30) from last Friday of March until last Friday of September
-    # Simple heuristic: month 4-9 inclusive = DST
-    if 4 <= dt.month <= 9:
-        offset = timedelta(hours=4, minutes=30)
-        tz_label = "IRDT"
-    else:
-        offset = timedelta(hours=3, minutes=30)
-        tz_label = "IRST"
-    tehran_dt = dt + offset
-    return tehran_dt.strftime("%H:%M")
+    from zoneinfo import ZoneInfo
+    return dt.astimezone(ZoneInfo("Asia/Tehran")).strftime("%H:%M")
 
 
 def get_price_move_from_db(conn, symbol: str, tf: str, event_ts: datetime) -> dict[str, Any]:
