@@ -1,0 +1,283 @@
+{
+  "id": "xauusdPerModulePipeline01",
+  "name": "XAUUSD Per-Module Pipeline",
+  "description": "SPEC.md §3 + CLAUDE.md: each analytical module gets its own HTTP Request node. Parallel compute → Merge → signal/latest → Telegram.",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "node-sched-001",
+      "name": "Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-800, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Capture the trigger timestamp once so all parallel branches use the same as_of.\n// Using $now (the moment the schedule fired) rather than a hardcoded string\n// so the value is always UTC and always behind the latest closed candle.\nconst asOf = $now.toISO();\nreturn [{ json: { asOf } }];"
+      },
+      "id": "node-code-001",
+      "name": "Capture timestamp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-580, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://172.18.0.1:8000/levels/compute",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "symbol", "value": "XAUUSD@" },
+            { "name": "tf", "value": "M5" },
+            { "name": "as_of", "value": "={{ $json.asOf }}" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-levels-001",
+      "name": "levels/compute",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [-300, -500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://172.18.0.1:8000/patterns/compute",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "symbol", "value": "XAUUSD@" },
+            { "name": "tf", "value": "M5" },
+            { "name": "as_of", "value": "={{ $json.asOf }}" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-patterns-001",
+      "name": "patterns/compute",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [-300, -300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://172.18.0.1:8000/round_numbers/compute",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "symbol", "value": "XAUUSD@" },
+            { "name": "tf", "value": "M5" },
+            { "name": "as_of", "value": "={{ $json.asOf }}" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-rounds-001",
+      "name": "round_numbers/compute",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [-300, -100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://172.18.0.1:8000/gaps/compute",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "symbol", "value": "XAUUSD@" },
+            { "name": "tf", "value": "M5" },
+            { "name": "as_of", "value": "={{ $json.asOf }}" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-gaps-001",
+      "name": "gaps/compute",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [-300, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://172.18.0.1:8000/fibonacci/compute",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "symbol", "value": "XAUUSD@" },
+            { "name": "tf", "value": "M5" },
+            { "name": "as_of", "value": "={{ $json.asOf }}" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-fib-001",
+      "name": "fibonacci/compute",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [-300, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://172.18.0.1:8000/regime/compute",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "symbol", "value": "XAUUSD@" },
+            { "name": "tf", "value": "M5" },
+            { "name": "as_of", "value": "={{ $json.asOf }}" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-regime-001",
+      "name": "regime/compute",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [-300, 500]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex",
+        "options": {}
+      },
+      "id": "node-merge-001",
+      "name": "Wait for all modules",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [100, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://172.18.0.1:8000/signal/latest",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "symbol", "value": "XAUUSD@" },
+            { "name": "tf", "value": "M5" }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "node-signal-001",
+      "name": "signal/latest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [340, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-signal-001",
+              "leftValue": "={{ $json.signal }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-001",
+      "name": "Signal fired?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [570, 0]
+    },
+    {
+      "parameters": {
+        "chatId": "-1003415771278",
+        "text": "={{ $json.signal.direction === 'BUY' ? '🟢' : '🔴' }} XAUUSD@ | {{ $json.signal.direction === 'BUY' ? 'خرید (BUY)' : 'فروش (SELL)' }}\nقیمت ورود: {{ $json.signal.entry.toFixed(3) }}\nSL پیشنهادی: {{ ($json.signal.direction === 'BUY' ? ($json.signal.entry - 2 * $json.signal.components.atr) : ($json.signal.entry + 2 * $json.signal.components.atr)).toFixed(3) }} (−2×ATR)\nTP پیشنهادی: {{ ($json.signal.direction === 'BUY' ? ($json.signal.entry + 3 * $json.signal.components.atr) : ($json.signal.entry - 3 * $json.signal.components.atr)).toFixed(3) }} (+3×ATR)\nسطح برخوردی: {{ $json.signal.components.level_kind === 'support' ? 'حمایت' : 'مقاومت' }} [{{ $json.signal.components.level_price_low }} - {{ $json.signal.components.level_price_high }}]\nقدرت سطح: {{ $json.signal.components.level_strength.toFixed(3) }}\nفاصله تا سطح: {{ $json.signal.components.distance.toFixed(3) }} (ATR={{ $json.signal.components.atr.toFixed(3) }})\nقانون: {{ $json.signal.rule_version }} (status=testing، بک‌تست نشده)\nزمان (تهران): {{ $json.signal.ts_utc.toDateTime().setZone('Asia/Tehran').toFormat('yyyy-MM-dd HH:mm') }}",
+        "additionalFields": {}
+      },
+      "id": "node-telegram-001",
+      "name": "Send Telegram message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [810, -120],
+      "credentials": {
+        "telegramApi": {
+          "id": "xauusdBotTelegramCred01",
+          "name": "XAUUSD Bot Telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 5 minutes": {
+      "main": [[{ "node": "Capture timestamp", "type": "main", "index": 0 }]]
+    },
+    "Capture timestamp": {
+      "main": [
+        [
+          { "node": "levels/compute",       "type": "main", "index": 0 },
+          { "node": "patterns/compute",     "type": "main", "index": 0 },
+          { "node": "round_numbers/compute","type": "main", "index": 0 },
+          { "node": "gaps/compute",         "type": "main", "index": 0 },
+          { "node": "fibonacci/compute",    "type": "main", "index": 0 },
+          { "node": "regime/compute",       "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "levels/compute":        { "main": [[{ "node": "Wait for all modules", "type": "main", "index": 0 }]] },
+    "patterns/compute":      { "main": [[{ "node": "Wait for all modules", "type": "main", "index": 1 }]] },
+    "round_numbers/compute": { "main": [[{ "node": "Wait for all modules", "type": "main", "index": 2 }]] },
+    "gaps/compute":          { "main": [[{ "node": "Wait for all modules", "type": "main", "index": 3 }]] },
+    "fibonacci/compute":     { "main": [[{ "node": "Wait for all modules", "type": "main", "index": 4 }]] },
+    "regime/compute":        { "main": [[{ "node": "Wait for all modules", "type": "main", "index": 5 }]] },
+    "Wait for all modules": {
+      "main": [[{ "node": "signal/latest", "type": "main", "index": 0 }]]
+    },
+    "signal/latest": {
+      "main": [[{ "node": "Signal fired?", "type": "main", "index": 0 }]]
+    },
+    "Signal fired?": {
+      "main": [
+        [{ "node": "Send Telegram message", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "tags": []
+}
