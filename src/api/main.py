@@ -238,6 +238,59 @@ async def signal_latest(
     return await run_in_threadpool(_check_signal_sync, symbol, tf)
 
 
+
+# ---------------------------------------------------------------------------
+# Patterns (SPEC.md 4.3)
+# ---------------------------------------------------------------------------
+from src.features.patterns import compute_patterns, load_patterns_params
+from src.features.patterns_store import (
+    fetch_candles_for_patterns,
+    fetch_active_levels as fetch_active_levels_for_patterns,
+    upsert_pattern_hits,
+)
+
+
+def _compute_and_store_patterns_sync(symbol: str, tf: str, ts) -> dict:
+    conn = get_connection()
+    try:
+        candles = fetch_candles_for_patterns(conn, symbol, tf, ts)
+        levels = fetch_active_levels_for_patterns(conn, symbol, tf)
+        hits = compute_patterns(candles, ts, symbol, tf, levels=levels)
+        result = upsert_pattern_hits(conn, hits)
+        conn.commit()
+        by_pattern: dict = {}
+        for h in hits:
+            by_pattern[h["pattern"]] = by_pattern.get(h["pattern"], 0) + 1
+        return {
+            "symbol": symbol, "tf": tf, "as_of": ts.isoformat(),
+            "pattern_hits": len(hits),
+            "unique_patterns": len(by_pattern),
+            **result,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/patterns/compute")
+async def compute_patterns_endpoint(
+    symbol: str = Query(...),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """SPEC.md 4.3. Detect all 61 TA-Lib CDL patterns up to as_of and
+    upsert into pattern_hits. Levels context (at_level_id, level_strength)
+    is linked from the active levels in DB at computation time."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    allowed_tfs = load_levels_params()["timeframes"]
+    if tf not in allowed_tfs:
+        raise HTTPException(status_code=422, detail=f"tf must be one of {allowed_tfs}")
+    return await run_in_threadpool(_compute_and_store_patterns_sync, symbol, tf, ts)
+
 # ---------------------------------------------------------------------------
 # Round numbers (SPEC.md 4.4)
 # ---------------------------------------------------------------------------
