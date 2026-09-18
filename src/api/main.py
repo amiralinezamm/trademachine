@@ -92,6 +92,30 @@ async def blackout_status(as_of: str = Query(..., description="ISO-8601 timestam
     }
 
 
+
+@app.post("/news/calendar/ingest")
+async def news_calendar_ingest():
+    """SPEC.md 4.7: pull ForexFactory thisweek XML, upsert into news_events.
+    Idempotent. n8n calls this every 6 h."""
+    from starlette.concurrency import run_in_threadpool
+    from src.news.fetch_calendar import (
+        fetch_raw_xml, parse_events, filter_events, upsert_events, get_connection,
+    )
+
+    def _run():
+        xml_text = fetch_raw_xml()
+        events = parse_events(xml_text)
+        kept = filter_events(events)
+        conn = get_connection()
+        try:
+            n = upsert_events(conn, kept)
+            conn.commit()
+        finally:
+            conn.close()
+        return {"raw": len(events), "kept": len(kept), "upserted": n}
+
+    return await run_in_threadpool(_run)
+
 class CandleIn(BaseModel):
     ts_utc: datetime
     open: float
