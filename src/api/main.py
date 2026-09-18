@@ -116,6 +116,62 @@ async def news_calendar_ingest():
 
     return await run_in_threadpool(_run)
 
+@app.get("/news/upcoming")
+async def news_upcoming():
+    """SPEC.md 4.7 / کار 5: upcoming High/Medium events formatted for Telegram /news command.
+    No actual yet — shows schedule + expected direction only.
+    """
+    from starlette.concurrency import run_in_threadpool
+    import datetime as _dt
+    from src.news.fetch_calendar import get_connection
+    from src.news.surprise import load_event_map, lookup_gold_sign
+    from src.news.news_reporter import build_upcoming_message
+
+    def _run():
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT title, country, impact, ts_utc, forecast, previous
+                    FROM news_events
+                    WHERE ts_utc > NOW()
+                      AND impact IN ('High', 'Medium')
+                      AND (actual IS NULL OR actual = '')
+                    ORDER BY ts_utc ASC
+                    LIMIT 20
+                    """,
+                )
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+
+        event_map = load_event_map()
+        results = []
+        for title, country, impact, ts_utc, forecast, previous in rows:
+            if ts_utc.tzinfo is None:
+                ts_utc = ts_utc.replace(tzinfo=_dt.timezone.utc)
+            event = {
+                "title": title,
+                "country": country,
+                "impact": impact,
+                "ts_utc": ts_utc,
+                "forecast": forecast,
+                "previous": previous,
+            }
+            gold_sign = lookup_gold_sign(title, event_map)
+            surprise_result = {"gold_sign": gold_sign, "mapped": gold_sign is not None}
+            msg = build_upcoming_message(event, surprise_result)
+            results.append({
+                "title": title,
+                "ts_utc": ts_utc.isoformat(),
+                "impact": impact,
+                "message": msg,
+            })
+        return {"count": len(results), "events": results}
+
+    return await run_in_threadpool(_run)
+
 class CandleIn(BaseModel):
     ts_utc: datetime
     open: float

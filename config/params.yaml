@@ -27,6 +27,13 @@ news:
     # sign(surprise) x gold_sign direction is reported — no z_surprise.
     min_samples_for_z: 10
 
+  intensity:
+    # Minimum historical episodes to report a move range (SPEC.md 4.7-b).
+    # Below this, report insufficient data rather than fabricate a range.
+    min_episodes: 5
+    # band_width: deferred. Full-history fallback until DB has paired z/move rows.
+    band_width: 0.5
+
 mt5_bridge:
   # WM Markets demo account, confirmed same depth on live (user, 2026-09-15).
   symbol: "XAUUSD@"
