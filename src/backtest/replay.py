@@ -57,6 +57,11 @@ def load_atr_period() -> int:
         return yaml.safe_load(f)["signal_rules"]["level_reversion"].get("atr_period", 14)
 
 
+def load_break_atr_mult() -> float:
+    with open(PARAMS_PATH) as f:
+        return float(yaml.safe_load(f)["levels"]["break_atr_mult"])
+
+
 # ---------------------------------------------------------------------------
 # Session detection (UTC hour → session name for fallback spread lookup)
 # ---------------------------------------------------------------------------
@@ -119,13 +124,13 @@ def _fetch_all_candles(conn, symbol: str, tf: str,
 
 
 def _fetch_all_levels(conn, symbol: str, tf: str) -> list[dict]:
-    """All levels (active+flipped) sorted by created_ts for bisect filtering."""
+    """All levels sorted by created_ts for bisect filtering (no status filter — historical levels were active when created)."""
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT id, kind, price_low, price_high, strength, status, created_ts
             FROM levels
-            WHERE symbol = %s AND tf_origin = %s AND status IN ('active', 'flipped')
+            WHERE symbol = %s AND tf_origin = %s
             ORDER BY created_ts
             """,
             (symbol, tf),
@@ -165,7 +170,7 @@ def _fetch_all_fib_zones(conn, symbol: str, tf: str) -> list[dict]:
         cur.execute(
             """
             SELECT computed_at AS ts_utc, price, level_pct, role, overlapping
-            FROM fibonacci_zones WHERE symbol=%s AND tf=%s ORDER BY computed_at
+            FROM fibonacci_zones WHERE symbol=%s AND tf_origin=%s ORDER BY computed_at
             """,
             (symbol, tf),
         )
@@ -317,34 +322,54 @@ def _make_context(
 
 def _determine_outcome(
     candles: list[dict],
+    atr_arr,
     entry_idx: int,
     entry_price: float,
     direction: str,
     sl: float,
     tp: float,
-    timeout_bars: int,
-) -> tuple[str, float | None]:
-    """Scan forward from entry_idx+1 for SL/TP hit or timeout.
+    max_safety_bars: int,
+    level_lo: float,
+    level_hi: float,
+    break_mult: float,
+) -> tuple[str, float]:
+    """Scan forward from entry_idx+1 for the first exit condition.
 
-    Returns (outcome, exit_price) where outcome in ('tp','sl','timeout','open').
-    'open' means we hit the end of the dataset before timeout.
+    Exit priority (checked in this order each bar):
+      1. SL hit   → 'sl'
+      2. TP hit   → 'tp'
+      3. Level invalidated (same break condition as levels.py walk-forward) → 'level_invalidated'
+      4. max_safety_bars reached (safety cap, not the primary criterion)    → 'timeout'
+      5. End of dataset before safety cap                                   → 'open'
+
+    Break condition (from levels.py lines 157-164):
+      BUY  (from support):    close < level_lo - break_mult * atr  → support broken downward
+      SELL (from resistance): close > level_hi + break_mult * atr  → resistance broken upward
     """
-    sign = 1 if direction == "BUY" else -1
-    limit = min(entry_idx + timeout_bars + 1, len(candles))
+    limit = min(entry_idx + max_safety_bars + 1, len(candles))
     for j in range(entry_idx + 1, limit):
         c = candles[j]
         h = float(c["high"])
         lo = float(c["low"])
+        close_j = float(c["close"])
+        atr_j_raw = atr_arr[j]
+        atr_j = float(atr_j_raw) if atr_j_raw == atr_j_raw else None  # NaN guard
+
         if direction == "BUY":
             if lo <= sl:
                 return "sl", sl
             if h >= tp:
                 return "tp", tp
+            if atr_j and close_j < level_lo - break_mult * atr_j:
+                return "level_invalidated", close_j
         else:  # SELL
             if h >= sl:
                 return "sl", sl
             if lo <= tp:
                 return "tp", tp
+            if atr_j and close_j > level_hi + break_mult * atr_j:
+                return "level_invalidated", close_j
+
     if limit == len(candles):
         return "open", float(candles[-1]["close"])
     return "timeout", float(candles[limit - 1]["close"])
@@ -407,16 +432,10 @@ def run_backtest(
     bt_cfg = costs.get("backtest", {})
     sl_mult = float(bt_cfg.get("sl_atr_mult", 2.0))
     tp_mult = float(bt_cfg.get("tp_atr_mult", 3.0))
-    timeout_bars = bt_cfg.get("timeout_bars")
-
-    if timeout_bars is None:
-        raise ValueError(
-            "costs.yaml backtest.timeout_bars is null — set it before running. "
-            "Ask the user: 12 bars (1 h), 24 bars (2 h), or 48 bars (4 h)?"
-        )
-    timeout_bars = int(timeout_bars)
+    max_safety_bars = int(bt_cfg.get("max_safety_bars", 288))
 
     atr_period = load_atr_period()
+    break_mult = load_break_atr_mult()
     rule_params = load_rule_params()
 
     log.info("Connecting to DB…")
@@ -449,7 +468,8 @@ def run_backtest(
         # Sort gap list (already ordered by ts_utc from query, but ensure)
         all_gaps.sort(key=lambda r: r["ts_utc"])
 
-        stats = {"total": 0, "signals": 0, "tp": 0, "sl": 0, "timeout": 0, "open": 0}
+        stats = {"total": 0, "signals": 0,
+                 "tp": 0, "sl": 0, "level_invalidated": 0, "timeout": 0, "open": 0}
         BATCH = 200
         batch_signals = []
 
@@ -467,6 +487,7 @@ def run_backtest(
             stats["total"] += 1
 
             levels_now = _levels_at(all_levels, ts)
+            levels_now = [{**l, "status": "active"} for l in levels_now]
             signal = check_level_reversion(
                 symbol=symbol, tf=tf, ts_utc=ts,
                 close=close, atr=float(atr), levels=levels_now,
@@ -494,8 +515,11 @@ def run_backtest(
                 sl = entry + sl_mult * float(atr)
                 tp = entry - tp_mult * float(atr)
 
+            level_lo = float(signal["components"].get("level_price_low", 0))
+            level_hi = float(signal["components"].get("level_price_high", 0))
             outcome, exit_price = _determine_outcome(
-                candles, i + 1, entry, direction, sl, tp, timeout_bars
+                candles, atr_arr, i + 1, entry, direction, sl, tp,
+                max_safety_bars, level_lo, level_hi, break_mult,
             )
             pnl = _pnl(direction, entry, exit_price, cost)
 
@@ -516,11 +540,13 @@ def run_backtest(
                 _upsert_signal(conn, *args)
             conn.commit()
 
-        log.info("Done. signals=%d tp=%d sl=%d timeout=%d open=%d",
-                 stats["signals"], stats["tp"], stats["sl"],
-                 stats["timeout"], stats["open"])
+        log.info(
+            "Done. signals=%d tp=%d sl=%d level_invalidated=%d timeout=%d open=%d",
+            stats["signals"], stats["tp"], stats["sl"],
+            stats["level_invalidated"], stats["timeout"], stats["open"],
+        )
         if stats["signals"] > 0:
-            winrate = (stats["tp"]) / stats["signals"]
+            winrate = stats["tp"] / stats["signals"]
             log.info("Raw winrate (tp only): %.1f%%", winrate * 100)
 
         return stats
