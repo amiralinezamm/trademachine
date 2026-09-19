@@ -137,10 +137,17 @@ patterns:
 signal_rules:
   level_reversion:
     id: "level_reversion_v1"
-    # User-specified today (2026-09-15), narrow first path, not from SPEC.md:
-    # price within proximity_atr_mult * ATR of an active level with
-    # above-median strength -> reversal signal (support=BUY, resistance=SELL).
-    proximity_atr_mult: 0.3
+    # UPDATED 2026-09-19: proximity_atr_mult replaced by zone-touch + directional
+    # close (edge-trigger). Signal fires only when the bar's wick enters the zone
+    # AND the close is back outside in the reversal direction (not a break-through).
+    # proximity_atr_mult: 0.3  # DEPRECATED — no longer used in check_level_reversion
+
+  # PROPOSED (status=proposed, no code yet) — see SPEC.md 4.2-ب
+  double_touch_confidence_multiplier:
+    status: proposed
+    lookback_bars: 50          # bars to scan back for prior touch+confirm events
+    min_touches: 2             # minimum qualifying touches in window
+    multiplier: 1.3            # base confidence multiplier (sweep range: 1.1–1.5)
 
 round_numbers:
   # SPEC.md 4.4. Psychological price levels and their dual effect.
