@@ -139,6 +139,34 @@ def _fetch_all_levels(conn, symbol: str, tf: str) -> list[dict]:
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
+
+def _fetch_all_levels_history(conn, symbol: str, tf: str) -> dict[int, list[dict]]:
+    """Fetch all levels_history rows and group by level_id.
+
+    Returns {level_id: [sorted events by ts_utc]} for point-in-time lookup.
+    Each event dict has: ts_utc, strength, status, touch_count, break_count.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT lh.level_id, lh.ts_utc, lh.strength, lh.status,
+                   lh.touch_count, lh.break_count
+            FROM levels_history lh
+            JOIN levels l ON l.id = lh.level_id
+            WHERE l.symbol = %s AND l.tf_origin = %s
+            ORDER BY lh.level_id, lh.ts_utc
+            """,
+            (symbol, tf),
+        )
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    grouped: dict[int, list[dict]] = {}
+    for r in rows:
+        grouped.setdefault(r["level_id"], []).append(r)
+    return grouped
+
+
 def _fetch_all_regime(conn, symbol: str, tf: str) -> list[dict]:
     with conn.cursor() as cur:
         cur.execute(
@@ -247,6 +275,36 @@ def _levels_at(all_levels: list[dict], as_of_ts: datetime) -> list[dict]:
     keys = [r["created_ts"] for r in all_levels]
     idx = bisect.bisect_right(keys, as_of_ts)
     return all_levels[:idx]
+
+
+
+def _level_state_at(
+    history_by_id: dict[int, list[dict]],
+    level_id: int,
+    as_of_ts,
+) -> tuple[float, str, int, int]:
+    """Point-in-time lookup: (strength, status, touch_count, break_count) for
+    a level at as_of_ts, using the most recent levels_history entry.
+
+    If no history entry exists yet (level was just created, no events before
+    as_of_ts), returns (0.0, "active", 0, 0) — the level's initial state.
+
+    Note: strength is stored at the moment of each touch/break event.
+    Between events, the true strength is lower (exponential decay since last
+    touch), but the stored value is used as an upper-bound approximation.
+    This is a conscious trade-off: better than strength=0 for all historical
+    levels, and the median-relative comparison in check_level_reversion
+    remains approximately correct since all levels experience the same decay.
+    """
+    entries = history_by_id.get(level_id)
+    if not entries:
+        return 0.0, "active", 0, 0
+    ts_list = [e["ts_utc"] for e in entries]
+    idx = bisect.bisect_right(ts_list, as_of_ts) - 1
+    if idx < 0:
+        return 0.0, "active", 0, 0
+    e = entries[idx]
+    return float(e["strength"]), str(e["status"]), int(e["touch_count"]), int(e["break_count"])
 
 
 def _open_gaps_at(all_gaps: list[dict], as_of_ts: datetime) -> list[dict]:
@@ -455,14 +513,15 @@ def run_backtest(
 
         log.info("Pre-fetching module outputs…")
         all_levels = _fetch_all_levels(conn, symbol, tf)
+        history_by_id = _fetch_all_levels_history(conn, symbol, tf)
         all_regime  = _fetch_all_regime(conn, symbol, tf)
         all_rounds  = _fetch_all_round_hits(conn, symbol, tf)
         all_fib     = _fetch_all_fib_zones(conn, symbol, tf)
         all_pats    = _fetch_all_patterns(conn, tf, from_ts, to_ts)
         all_gaps    = _fetch_all_gaps(conn, symbol, tf)
         all_corr    = _fetch_all_corr(conn, symbol, tf)
-        log.info("  levels=%d regime=%d rounds=%d fib=%d pats=%d gaps=%d corr=%d",
-                 len(all_levels), len(all_regime), len(all_rounds),
+        log.info("  levels=%d history_keys=%d regime=%d rounds=%d fib=%d pats=%d gaps=%d corr=%d",
+                 len(all_levels), len(history_by_id), len(all_regime), len(all_rounds),
                  len(all_fib), len(all_pats), len(all_gaps), len(all_corr))
 
         # Sort gap list (already ordered by ts_utc from query, but ensure)
@@ -487,10 +546,21 @@ def run_backtest(
             stats["total"] += 1
 
             levels_now = _levels_at(all_levels, ts)
-            levels_now = [{**l, "status": "active"} for l in levels_now]
+            # Apply point-in-time strength/status from levels_history.
+            # Levels with no history entry yet (freshly created, no touches)
+            # default to (0.0, "active") — filter to active/flipped only.
+            pit_levels = []
+            for lvl in levels_now:
+                s, status, tc, bc = _level_state_at(history_by_id, lvl["id"], ts)
+                if status not in ("active", "flipped"):
+                    continue
+                pit_levels.append({**lvl, "strength": s, "status": status,
+                                   "touch_count": tc, "break_count": bc})
+            if not pit_levels:
+                continue
             signal = check_level_reversion(
                 symbol=symbol, tf=tf, ts_utc=ts,
-                close=close, atr=float(atr), levels=levels_now,
+                close=close, atr=float(atr), levels=pit_levels,
                 params=rule_params,
             )
             if signal is None:
