@@ -542,6 +542,8 @@ def run_backtest(
 
             c = candles[i]
             ts = c["ts_utc"]
+            high  = float(c["high"])
+            low   = float(c["low"])
             close = float(c["close"])
             stats["total"] += 1
 
@@ -560,6 +562,7 @@ def run_backtest(
                 continue
             signal = check_level_reversion(
                 symbol=symbol, tf=tf, ts_utc=ts,
+                high=high, low=low,
                 close=close, atr=float(atr), levels=pit_levels,
                 params=rule_params,
             )

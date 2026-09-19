@@ -306,6 +306,7 @@ def _check_signal_sync(symbol: str, tf: str) -> dict:
         levels = fetch_active_levels(conn, symbol, tf, candle["ts_utc"])
         signal = check_level_reversion(
             symbol=symbol, tf=tf, ts_utc=candle["ts_utc"],
+            high=float(candle["high"]), low=float(candle["low"]),
             close=float(candle["close"]), atr=atr, levels=levels,
         )
         if signal is None:
