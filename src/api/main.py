@@ -41,6 +41,25 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="XAUUSD Trader Bot API", lifespan=lifespan)
 
 
+
+def is_forex_market_open(utc_dt: datetime) -> bool:
+    """True when XAUUSD/gold is expected to be trading.
+
+    Gold/FX on WM Markets runs Sun 21:00 – Fri 21:00 UTC.
+    This is a time-based fallback, not a live MT5 query — it will not catch
+    broker-specific early closes (e.g. Christmas Eve) or delayed Sunday opens.
+    """
+    wd = utc_dt.weekday()  # 0=Mon … 4=Fri, 5=Sat, 6=Sun
+    h = utc_dt.hour
+    if wd == 5:            # Saturday: always closed
+        return False
+    if wd == 6 and h < 21: # Sunday before 21:00 UTC: still closed
+        return False
+    if wd == 4 and h >= 21: # Friday from 21:00 UTC: closed
+        return False
+    return True
+
+
 @app.get("/health")
 async def health():
     """Pipeline health: last candle received, last signal fired, candle lag."""
@@ -60,6 +79,7 @@ async def health():
         last_candle_iso = None
     return {
         "status": "ok",
+        "market_open": is_forex_market_open(now),
         "last_candle_at": last_candle_iso,
         "candle_lag_minutes": round(lag_s / 60, 1) if lag_s is not None else None,
         "last_signal": {
