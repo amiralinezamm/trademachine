@@ -65,6 +65,7 @@ def _add_or_merge(
     levels.append(
         {
             "kind": kind,
+            "initial_kind": kind,   # stable even after flips — used for history keying
             "price_low": new_lo,
             "price_high": new_hi,
             "created_ts": created_ts,
@@ -85,10 +86,20 @@ def compute_levels(
     symbol: str,
     tf: str,
     params: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
+    record_history: bool = False,
+) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """candles: {"ts_utc","open","high","low","close"} dicts, any order/range —
     the as_of_ts cutoff is enforced here, not trusted from the caller.
-    Returns level dicts matching the `levels` table columns."""
+    Returns level dicts matching the `levels` table columns.
+
+    record_history=True: also returns a list of state-change events
+    (touch / break / creation / expiry) suitable for bulk-insert into
+    levels_history. Used only by scripts/rebuild_levels_history.py — live
+    callers leave the default False to avoid any overhead.
+    Return type when record_history=True: (levels_list, history_events_list).
+    Each history event: {created_ts, initial_kind, ts_utc, strength, status,
+                         touch_count, break_count}.
+    """
     if params is None:
         params = load_levels_params()
 
@@ -97,6 +108,8 @@ def compute_levels(
     N = params["swing_n"]
     atr_period = params["atr_period"]
     if n < 2 * N + atr_period + 1:
+        if record_history:
+            return [], []
         return []
 
     highs = np.array([float(c["high"]) for c in hist])
@@ -118,6 +131,26 @@ def compute_levels(
     normal_max_days = params.get("normal_max_days", 30)
 
     levels: list[dict[str, Any]] = []
+    history_events: list[dict[str, Any]] = []
+
+    # Per-level prev state for change detection (only populated when record_history=True).
+    # Key: index into `levels` list; value: (touch_count, break_count, status)
+    prev_state: dict[int, tuple[int, int, str]] = {}
+
+    def _emit(lvl: dict, bar_j: int) -> None:
+        """Append a history event for this level at bar j."""
+        cur_strength = sum(math.exp(-lam * (bar_j - t_idx)) for t_idx in lvl["touches"])
+        if lvl["status"] == "flipped":
+            cur_strength /= 2
+        history_events.append({
+            "created_ts": lvl["created_ts"],
+            "initial_kind": lvl["initial_kind"],
+            "ts_utc": ts[bar_j],
+            "strength": float(cur_strength),
+            "status": lvl["status"],
+            "touch_count": int(lvl["touch_count"]),
+            "break_count": int(lvl["break_count"]),
+        })
 
     # --- Interleaved walk-forward + swing detection ---
     #
@@ -141,10 +174,13 @@ def compute_levels(
         # Walk-forward for bar j -- only when ATR is valid (early NaN bars
         # have no reliable break threshold, same behaviour as before).
         if not math.isnan(cur_atr):
-            for lvl in levels:
+            for idx, lvl in enumerate(levels):
                 if lvl["created_idx"] + N > j or lvl["status"] not in ("active", "flipped"):
                     continue
                 lo, hi = lvl["price_low"], lvl["price_high"]
+
+                if record_history:
+                    snap = (lvl["touch_count"], lvl["break_count"], lvl["status"])
 
                 entered = cur_low <= hi and cur_high >= lo
                 closed_outside = cur_close < lo or cur_close > hi
@@ -163,6 +199,12 @@ def compute_levels(
                     lvl["kind"] = "resistance"
                     lvl["status"] = "expired" if lvl["break_count"] >= max_break_count else "flipped"
 
+                if record_history:
+                    new_snap = (lvl["touch_count"], lvl["break_count"], lvl["status"])
+                    if new_snap != snap:
+                        _emit(lvl, j)
+                        prev_state[idx] = new_snap
+
         # Swing detection: bar j confirms the swing at bar j-N.
         # A swing at swing_idx needs N bars before it and N bars after it,
         # so it is confirmed (and added to levels) exactly when j = swing_idx + N.
@@ -177,6 +219,8 @@ def compute_levels(
         after_hi  = highs[swing_idx + 1:swing_idx + N + 1]
         before_lo = lows[swing_idx - N:swing_idx]
         after_lo  = lows[swing_idx + 1:swing_idx + N + 1]
+
+        old_count = len(levels)
 
         if highs[swing_idx] > before_hi.max() and highs[swing_idx] > after_hi.max():
             retrace = highs[swing_idx] - after_lo.min()
@@ -200,12 +244,27 @@ def compute_levels(
                     merge_mult * atr[swing_idx],
                 )
 
+        # Emit creation events for newly added levels
+        if record_history and len(levels) > old_count:
+            for new_idx in range(old_count, len(levels)):
+                new_lvl = levels[new_idx]
+                prev_state[new_idx] = (0, 0, "active")
+                history_events.append({
+                    "created_ts": new_lvl["created_ts"],
+                    "initial_kind": new_lvl["initial_kind"],
+                    "ts_utc": ts[j],
+                    "strength": 0.0,
+                    "status": "active",
+                    "touch_count": 0,
+                    "break_count": 0,
+                })
+
     # --- Strength + expiry, evaluated as of the last confirmed bar ---
     last_idx = n - 1
     cur_close, cur_atr = closes[last_idx], atr[last_idx]
 
     result = []
-    for lvl in levels:
+    for idx, lvl in enumerate(levels):
         if lvl["created_idx"] + N > last_idx:
             continue  # not confirmed yet as of as_of_ts -> must not appear
 
@@ -238,6 +297,18 @@ def compute_levels(
             if age_days > max_days:
                 status = "expired"
 
+        # Emit final-expiry event when status changed vs walk-forward state
+        if record_history and status != lvl["status"]:
+            history_events.append({
+                "created_ts": lvl["created_ts"],
+                "initial_kind": lvl["initial_kind"],
+                "ts_utc": ts[last_idx],
+                "strength": float(strength),
+                "status": status,
+                "touch_count": int(lvl["touch_count"]),
+                "break_count": int(lvl["break_count"]),
+            })
+
         result.append(
             {
                 "symbol": symbol,
@@ -258,4 +329,7 @@ def compute_levels(
                 "atr_at_birth": float(lvl["atr_at_birth"]),
             }
         )
+
+    if record_history:
+        return result, history_events
     return result
