@@ -41,11 +41,12 @@ def check_level_reversion(
 
     Signal fires ONLY when two conditions hold on the SAME bar (edge-trigger):
       1. Wick-entered zone: low <= price_high AND high >= price_low
-      2. Directional close confirms reversal (not a break-through):
-           support  (BUY):  close > price_high  (rebounded above zone)
-           resistance (SELL): close < price_low  (fell back below zone)
-    This prevents repeat-fire across consecutive bars where price hovers
-    near a zone without actually touching and rebounding.
+      2. Directional close with meaningful margin (confirm_atr_mult * ATR):
+           support  (BUY):  close > price_high + confirm_atr_mult * ATR
+           resistance (SELL): close < price_low  - confirm_atr_mult * ATR
+    The margin reuses levels.break_atr_mult semantics: same numeric value (0.5),
+    same idea of "close must clear the zone by a non-trivial distance".
+    This prevents repeat-fire and rules out tangential closes at the zone edge.
     """
     if params is None:
         params = load_rule_params()
@@ -70,12 +71,15 @@ def check_level_reversion(
         if not (low <= hi and high >= lo):
             continue
 
-        # Condition 2: close confirms directional reversal
+        # Condition 2: close confirms directional reversal with meaningful margin.
+        # Must be at least confirm_atr_mult * ATR beyond the zone edge, not just
+        # a pixel-level cross (mirrors the break_atr_mult threshold in levels.py).
+        margin = params.get("confirm_atr_mult", 0.5) * atr
         if lvl["kind"] == "support":
-            if not (close > hi):   # support: close must be back above zone
+            if not (close > hi + margin):   # rebounded meaningfully above zone
                 continue
-        else:                       # resistance: close must be back below zone
-            if not (close < lo):
+        else:                               # fell back meaningfully below zone
+            if not (close < lo - margin):
                 continue
 
         mid = (lo + hi) / 2

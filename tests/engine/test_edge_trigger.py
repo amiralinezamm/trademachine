@@ -63,7 +63,7 @@ class TestSupportBuy:
 
     def test_signal_when_wick_enters_and_close_above_zone(self):
         """Wick dipped into support zone, close rebounded above zone_high → BUY."""
-        result = _sig(high=2002.0, low=1992.0, close=1997.0, levels=[SUPPORT, WEAK_FAR])
+        result = _sig(high=2002.0, low=1992.0, close=2001.0, levels=[SUPPORT, WEAK_FAR])
         assert result is not None
         assert result["direction"] == "BUY"
         assert result["components"]["level_id"] == 1
@@ -84,7 +84,7 @@ class TestSupportBuy:
         assert r2 is None, "Should not fire — close still inside zone"
 
         # Bar 3: wick enters zone, close above zone_high — THIS is the signal bar
-        r3 = _sig(high=1997.0, low=1992.0, close=1996.0, levels=levels)
+        r3 = _sig(high=2005.0, low=1992.0, close=2001.0, levels=levels)
         assert r3 is not None, "Should fire on confirmation bar"
         assert r3["direction"] == "BUY"
 
@@ -102,7 +102,7 @@ class TestSupportBuy:
         support_far  = {**SUPPORT, "id": 10, "price_low": 1970.0, "price_high": 1975.0, "strength": 3.0}
         support_near = {**SUPPORT, "id": 11, "price_low": 1990.0, "price_high": 1995.0, "strength": 4.0}
         # Wick enters both zones; close=1997 → above both zones → both qualify
-        r = _sig(high=2000.0, low=1970.0, close=1997.0, levels=[support_far, support_near])
+        r = _sig(high=2005.0, low=1970.0, close=2001.0, levels=[support_far, support_near])
         assert r is not None
         assert r["components"]["level_id"] == 11  # nearer to close wins
 
@@ -133,7 +133,7 @@ class TestResistanceSell:
 
     def test_signal_when_wick_enters_and_close_below_zone(self):
         """Wick poked into resistance, close fell back below zone_low → SELL."""
-        result = _sig(high=2008.0, low=2000.0, close=2003.0,
+        result = _sig(high=2008.0, low=2000.0, close=1999.0,
                       levels=[RESISTANCE, WEAK_FAR_SUPPORT])
         assert result is not None
         assert result["direction"] == "SELL"
@@ -152,7 +152,7 @@ class TestResistanceSell:
         assert r2 is None
 
         # Bar 3: wick enters resistance, close back below zone_low — SIGNAL
-        r3 = _sig(high=2007.0, low=2001.0, close=2004.0, levels=levels)
+        r3 = _sig(high=2007.0, low=1998.0, close=1999.0, levels=levels)
         assert r3 is not None
         assert r3["direction"] == "SELL"
 

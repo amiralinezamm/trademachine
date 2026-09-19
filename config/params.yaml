@@ -141,6 +141,10 @@ signal_rules:
     # close (edge-trigger). Signal fires only when the bar's wick enters the zone
     # AND the close is back outside in the reversal direction (not a break-through).
     # proximity_atr_mult: 0.3  # DEPRECATED — no longer used in check_level_reversion
+    # Minimum distance from zone edge for the confirmation close, in ATR multiples.
+    # Reuses levels.break_atr_mult (same value, 0.5) so no new magic number is
+    # introduced. Can be tuned independently here if needed later.
+    confirm_atr_mult: 0.5
 
   # PROPOSED (status=proposed, no code yet) — see SPEC.md 4.2-ب
   double_touch_confidence_multiplier:
