@@ -336,6 +336,59 @@ def _check_signal_sync(symbol: str, tf: str) -> dict:
         conn.close()
 
 
+
+@app.get("/levels/near-price")
+async def levels_near_price(
+    symbol: str = Query("XAUUSD@"),
+    tf: str = Query("M5"),
+):
+    """Nearest active support below price and resistance above price."""
+    def _run():
+        conn = get_connection()
+        try:
+            candle = fetch_latest_closed_candle(conn, symbol, tf)
+            if candle is None:
+                return {"price": None, "support": None, "resistance": None,
+                        "reason": "no candles"}
+            price = float(candle["close"])
+            levels = fetch_active_levels(conn, symbol, tf, candle["ts_utc"])
+        finally:
+            conn.close()
+
+        support = resistance = None
+        best_sup_dist = best_res_dist = float("inf")
+        for lvl in levels:
+            mid = (float(lvl["price_low"]) + float(lvl["price_high"])) / 2
+            if lvl["kind"] == "support" and mid < price:
+                d = price - mid
+                if d < best_sup_dist:
+                    best_sup_dist = d
+                    support = {**lvl, "distance": round(d, 4)}
+            elif lvl["kind"] == "resistance" and mid > price:
+                d = mid - price
+                if d < best_res_dist:
+                    best_res_dist = d
+                    resistance = {**lvl, "distance": round(d, 4)}
+
+        def _clean(lvl):
+            if lvl is None:
+                return None
+            return {
+                k: (
+                    float(v) if hasattr(v, "__float__") and not isinstance(v, (str, bool))
+                    else v.isoformat() if hasattr(v, "isoformat") else v
+                )
+                for k, v in lvl.items()
+            }
+
+        return {
+            "price": price,
+            "support": _clean(support),
+            "resistance": _clean(resistance),
+        }
+
+    return await run_in_threadpool(_run)
+
 @app.get("/signal/latest")
 async def signal_latest(
     symbol: str = Query("XAUUSD@"),
