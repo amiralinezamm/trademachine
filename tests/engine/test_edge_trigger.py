@@ -159,3 +159,59 @@ class TestResistanceSell:
     def test_no_active_levels_returns_none(self):
         expired = {**RESISTANCE, "status": "expired"}
         assert _sig(high=2008.0, low=2000.0, close=2003.0, levels=[expired]) is None
+
+
+# ── Off hours resistance filter tests ────────────────────────────────────────
+
+def _sig_at_hour(hour: int, kind: str = "resistance", close: float = 1999.0):
+    """Helper: emit signal at given UTC hour using RESISTANCE or SUPPORT zone."""
+    from datetime import datetime, timezone
+    ts = datetime(2024, 1, 1, hour, 0, tzinfo=timezone.utc)
+    if kind == "resistance":
+        return check_level_reversion(
+            symbol="TEST", tf="M5", ts_utc=ts,
+            high=2008.0, low=1998.0, close=close,
+            atr=10.0, levels=[RESISTANCE, WEAK_FAR_SUPPORT], params={},
+        )
+    else:  # support
+        return check_level_reversion(
+            symbol="TEST", tf="M5", ts_utc=ts,
+            high=2002.0, low=1992.0, close=2001.0,
+            atr=10.0, levels=[SUPPORT, WEAK_FAR], params={},
+        )
+
+
+def test_off_hours_resistance_suppressed():
+    """Resistance signal suppressed during off hours (17-23 UTC)."""
+    for hour in (17, 20, 23):
+        result = _sig_at_hour(hour, kind="resistance")
+        assert result is None, f"expected None at hour {hour} (resistance)"
+
+
+def test_off_hours_support_still_fires():
+    """Support signal NOT suppressed during off hours — filter is resistance-only."""
+    for hour in (17, 20, 23):
+        result = _sig_at_hour(hour, kind="support")
+        assert result is not None, f"expected signal at hour {hour} (support)"
+        assert result["direction"] == "BUY"
+
+
+def test_intraday_resistance_still_fires():
+    """Resistance signal fires normally during non-off-hours (hours 0-16)."""
+    for hour in (0, 7, 12, 16):
+        result = _sig_at_hour(hour, kind="resistance")
+        assert result is not None, f"expected signal at hour {hour} (resistance)"
+        assert result["direction"] == "SELL"
+
+
+def test_off_hours_boundary_hour16_fires():
+    """Hour 16 is NOT off hours — resistance should still emit."""
+    result = _sig_at_hour(16, kind="resistance")
+    assert result is not None
+    assert result["direction"] == "SELL"
+
+
+def test_off_hours_boundary_hour17_suppressed():
+    """Hour 17 IS off hours — resistance suppressed."""
+    result = _sig_at_hour(17, kind="resistance")
+    assert result is None

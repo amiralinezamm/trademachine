@@ -67,6 +67,12 @@ def check_level_reversion(
             continue
         lo, hi = float(lvl["price_low"]), float(lvl["price_high"])
 
+        # Off hours (17-23 UTC) + resistance: EV-negative sub-segment
+        # (WR=40.1%, N=1,684, EV=-$1.18/sig from replay 2026-09-20).
+        _hour = getattr(ts_utc, "hour", None)
+        if _hour is not None and lvl["kind"] == "resistance" and 17 <= _hour <= 23:
+            continue
+
         # Condition 1: wick entered the zone (touch event)
         if not (low <= hi and high >= lo):
             continue
@@ -113,5 +119,6 @@ def check_level_reversion(
             "strength_median_at_signal": strength_median,
             "distance": dist,
             "atr": atr,
+            "close": close,
         },
     }
