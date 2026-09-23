@@ -73,6 +73,7 @@ def _add_or_merge(
             "last_touch": None,
             "touch_count": 0,
             "break_count": 0,
+            "first_break_ts": None,
             "status": "active",
             "atr_at_birth": atr_val,
             "touches": [],
@@ -191,10 +192,14 @@ def compute_levels(
 
                 # SPEC.md: break = CLOSE beyond the zone, never wick-only.
                 if lvl["kind"] == "resistance" and cur_close > hi + break_mult * cur_atr:
+                    if lvl["break_count"] == 0:
+                        lvl["first_break_ts"] = ts[j]
                     lvl["break_count"] += 1
                     lvl["kind"] = "support"
                     lvl["status"] = "expired" if lvl["break_count"] >= max_break_count else "flipped"
                 elif lvl["kind"] == "support" and cur_close < lo - break_mult * cur_atr:
+                    if lvl["break_count"] == 0:
+                        lvl["first_break_ts"] = ts[j]
                     lvl["break_count"] += 1
                     lvl["kind"] = "resistance"
                     lvl["status"] = "expired" if lvl["break_count"] >= max_break_count else "flipped"
@@ -284,18 +289,26 @@ def compute_levels(
             if strength_expired or abs(cur_close - mid) > expiry_dist_mult * cur_atr:
                 status = "expired"
 
-        # Time-based retention: age is measured from the LAST TOUCH (or from
-        # creation for untouched levels). This way a level tested yesterday is
-        # "fresh" regardless of how old its creation date is, while a level
-        # that price has abandoned for months expires cleanly.
-        # extreme = never touched (touch_count==0) -> extreme_max_days
-        # normal  = tested at least once               -> normal_max_days
+        # Time-based retention.
+        # break_count==0: never broken — extreme_max_days=365 from last_touch/creation.
+        # break_count>=1: strength-based decay from first_break_ts.
         if status in ("active", "flipped"):
-            anchor = lvl["last_touch"] if lvl["last_touch"] is not None else lvl["created_ts"]
-            age_days = (ts[last_idx] - anchor).total_seconds() / 86400
-            max_days = extreme_max_days if lvl["touch_count"] == 0 else normal_max_days
-            if age_days > max_days:
-                status = "expired"
+            if lvl["break_count"] == 0:
+                anchor = lvl["last_touch"] if lvl["last_touch"] is not None else lvl["created_ts"]
+                age_days = (ts[last_idx] - anchor).total_seconds() / 86400
+                if age_days > extreme_max_days:
+                    status = "expired"
+            else:
+                anchor = lvl.get("first_break_ts") or lvl["last_touch"]
+                if anchor is not None:
+                    age_days = (ts[last_idx] - anchor).total_seconds() / 86400
+                    str_ref = params.get("strength_ref_for_expiry", 2.0)
+                    effective_max_days = min(
+                        float(normal_max_days),
+                        float(normal_max_days) * max(0.0, strength) / str_ref,
+                    )
+                    if age_days > effective_max_days:
+                        status = "expired"
 
         # Emit final-expiry event when status changed vs walk-forward state
         if record_history and status != lvl["status"]:
@@ -324,6 +337,7 @@ def compute_levels(
                 "last_touch": lvl["last_touch"],
                 "touch_count": int(lvl["touch_count"]),
                 "break_count": int(lvl["break_count"]),
+                "first_break_ts": lvl.get("first_break_ts"),
                 "strength": float(strength),
                 "status": status,
                 "atr_at_birth": float(lvl["atr_at_birth"]),

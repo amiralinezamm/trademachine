@@ -2,21 +2,13 @@
 
 ## Prerequisites
 
-1. **`timeout_bars` must be set** in `config/costs.yaml` before the first run:
-   ```yaml
-   backtest:
-     timeout_bars: 48   # number of M5 bars before a signal is force-closed as "open"
-   ```
-   Currently `null` — the script will error without this value. Confirm the number
-   of bars with the team (typical choices: 12 = 1 h, 48 = 4 h, 288 = 24 h).
-
-2. **SSH to the server** — the DB is not accessible locally:
+1. **SSH to the server** — the DB is not accessible locally:
    ```bash
    ssh xauusd-bot
    cd /opt/xauusd-bot
    ```
 
-3. **Activated venv** (or use the full path below — no manual activation needed).
+2. **Activated venv** (or use the full path below — no manual activation needed).
 
 ---
 
@@ -101,8 +93,12 @@ count so far.
 
 | File | Purpose |
 |------|---------|
-| `config/costs.yaml` | Spread, slippage, swap, commission, `timeout_bars`, SL/TP ATR multipliers |
+| `config/costs.yaml` | Spread, slippage, swap, commission, SL/TP ATR multipliers |
 | `config/params.yaml` | Signal rules: `swing_n`, `confirm_atr_mult`, `min_same_direction_spacing_usd`, etc. |
+
+> **Exit criterion**: four outcomes — TP, SL, level_invalidated, safety cap.
+> The safety cap is controlled by `max_safety_bars` in `costs.yaml` (default: 288 bars = 24 h).
+> `timeout_bars` is **not** read by the code and can be ignored.
 
 ---
 

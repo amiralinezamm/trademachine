@@ -353,12 +353,13 @@ def test_level_still_active_at_max_break_count_minus_one():
     )
 
 
-def test_normal_level_expires_after_normal_max_days():
-    """Time-based retention: a level with touch_count > 0 must be expired
-    once it is older than normal_max_days (30 days by default)."""
-    params = {**PARAMS, "normal_max_days": 1}  # 1-day limit for the test
+def test_touched_unbroken_level_uses_extreme_max_days():
+    """Time-based retention (Task 1 overhaul): expiry discriminator is break_count,
+    not touch_count. A level with touch_count>0 but break_count=0 must use
+    extreme_max_days=365, NOT normal_max_days — it should NOT expire after 1 day."""
+    params = {**PARAMS, "normal_max_days": 1, "extreme_max_days": 365}
     candles, spike_ts, spike_high = _candles_with_resistance_and_touch()
-    # Append >1 day worth of bars (1 day = 24*12 = 288 M5 bars)
+    # 300 bars > 1 day, but << extreme_max_days=365
     last_ts = candles[-1]["ts_utc"]
     for _ in range(300):
         last_ts += BAR
@@ -367,10 +368,15 @@ def test_normal_level_expires_after_normal_max_days():
     as_of_ts = candles[-1]["ts_utc"]
     result = compute_levels(candles, as_of_ts, "TEST", "M5", params=params)
 
-    touched_levels = [lvl for lvl in result if lvl["touch_count"] > 0]
-    assert touched_levels, "fixture must produce a touched level"
-    assert all(lvl["status"] == "expired" for lvl in touched_levels), (
-        "touched level older than normal_max_days must be 'expired'"
+    # touch_count>0, break_count=0 → extreme_max_days path → still active after 1 day
+    touched_unbroken = [
+        lvl for lvl in result
+        if lvl["touch_count"] > 0 and lvl["break_count"] == 0
+    ]
+    assert touched_unbroken, "fixture must produce a touched-but-unbroken level"
+    assert all(lvl["status"] in ("active", "flipped") for lvl in touched_unbroken), (
+        "touched level with break_count=0 must NOT expire after only 1 day — "
+        "it now uses extreme_max_days=365, not normal_max_days"
     )
 
 

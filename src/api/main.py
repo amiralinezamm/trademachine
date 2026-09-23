@@ -20,7 +20,7 @@ from src.engine.signal_store import (
 from src.features.levels import compute_levels, load_levels_params
 from src.features.levels_store import fetch_candles, get_connection, upsert_levels
 from src.ingest.candles_store import TF_MINUTES, filter_closed_candles
-from src.news.blackout import get_blackout_status
+from src.news.blackout import compute_blackout, get_blackout_status
 
 load_dotenv()
 
@@ -292,6 +292,26 @@ async def compute_levels_endpoint(
     return await run_in_threadpool(_compute_and_store_levels_sync, symbol, tf, ts, lookback_bars)
 
 
+
+def _fetch_news_events_sync(conn, as_of_ts: datetime) -> list[dict]:
+    """Sync psycopg2 mirror of blackout.fetch_relevant_events — for use in
+    _check_signal_sync which cannot use async/asyncpg."""
+    window_start = as_of_ts - timedelta(hours=2)
+    window_end = as_of_ts + timedelta(hours=2)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT title, impact, ts_utc
+            FROM news_events
+            WHERE impact IN ('High', 'Medium')
+              AND ts_utc BETWEEN %s AND %s
+            """,
+            (window_start, window_end),
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
 def _check_signal_sync(symbol: str, tf: str) -> dict:
     """Sync (psycopg2) on purpose, same reasoning as levels/compute above.
     Reads the latest closed candle, its ATR, and levels known as of that
@@ -308,6 +328,12 @@ def _check_signal_sync(symbol: str, tf: str) -> dict:
         atr = fetch_atr_at(conn, symbol, tf, candle["ts_utc"], atr_period)
         if atr is None:
             return {"signal": None, "reason": "not enough history for ATR yet"}
+
+        # SPEC.md 4.7-a: suppress signal during pre/post news blackout window
+        _news_events = _fetch_news_events_sync(conn, candle["ts_utc"])
+        _bko = compute_blackout(candle["ts_utc"], _news_events)
+        if _bko["blackout"]:
+            return {"signal": None, "as_of": candle["ts_utc"].isoformat(), "reason": "blackout"}
 
         levels = fetch_active_levels(conn, symbol, tf, candle["ts_utc"])
         signal = check_level_reversion(

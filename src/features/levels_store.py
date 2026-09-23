@@ -80,7 +80,7 @@ def upsert_levels(conn, levels: list[dict[str, Any]]) -> dict[str, int]:
         (
             lvl["symbol"], lvl["tf_origin"], lvl["kind"], lvl["price_low"], lvl["price_high"],
             lvl["created_ts"], lvl["last_touch"], lvl["touch_count"], lvl["break_count"],
-            lvl["strength"], lvl["status"], lvl["atr_at_birth"],
+            lvl.get("first_break_ts"), lvl["strength"], lvl["status"], lvl["atr_at_birth"],
         )
         for lvl in levels
     ]
@@ -90,7 +90,8 @@ def upsert_levels(conn, levels: list[dict[str, Any]]) -> dict[str, int]:
             """
             INSERT INTO levels
                 (symbol, tf_origin, kind, price_low, price_high, created_ts,
-                 last_touch, touch_count, break_count, strength, status, atr_at_birth)
+                 last_touch, touch_count, break_count, first_break_ts,
+                 strength, status, atr_at_birth)
             VALUES %s
             ON CONFLICT (symbol, tf_origin, created_ts) DO UPDATE SET
                 kind = EXCLUDED.kind,
@@ -99,6 +100,7 @@ def upsert_levels(conn, levels: list[dict[str, Any]]) -> dict[str, int]:
                 last_touch = EXCLUDED.last_touch,
                 touch_count = EXCLUDED.touch_count,
                 break_count = EXCLUDED.break_count,
+                first_break_ts = LEAST(levels.first_break_ts, EXCLUDED.first_break_ts),
                 strength = EXCLUDED.strength,
                 status = EXCLUDED.status
             RETURNING (xmax = 0) AS was_insert

@@ -37,5 +37,5 @@ commission: 0.0          # broker charges via spread only (confirmed by user)
 backtest:
   sl_atr_mult:    2.0    # SL = entry ± sl_atr_mult × ATR
   tp_atr_mult:    3.0    # TP = entry ± tp_atr_mult × ATR
-  timeout_bars:   null   # ← MUST SET before running (ask user: 12/24/48?)
+  # timeout_bars: not read by the code — exit uses max_safety_bars (default 288)
   rule_version_suffix: ""  # appended to rule_version for backtest runs; "" = same as live

@@ -95,7 +95,7 @@ levels:
 
   zone_width_atr_mult: 0.25   # total zone width = this * ATR at birth
   break_atr_mult: 0.5         # candle must CLOSE this many ATRs beyond the zone to count as a valid break
-  merge_atr_mult: 0.25        # zones (same kind) closer than this * ATR are merged into one
+  merge_atr_mult: 1.0         # zones (same kind) closer than this * ATR are merged into one
 
   strength_lambda: 0.0015     # M5 decay rate; half-life ~460 bars (~40 trading hours)
 
@@ -125,6 +125,7 @@ levels:
   # at least once (can decay naturally via strength, but capped by age too).
   extreme_max_days: 365
   normal_max_days: 30
+  strength_ref_for_expiry: 2.0  # break_count>=1 expiry: min(30, 30 * strength / str_ref) days
 
 patterns:
   # SPEC.md 4.3. All 61 CDL* functions are run; body_atr filter is applied
@@ -145,6 +146,7 @@ signal_rules:
     # Reuses levels.break_atr_mult (same value, 0.5) so no new magic number is
     # introduced. Can be tuned independently here if needed later.
     confirm_atr_mult: 0.5
+    min_same_direction_spacing_usd: 10.0
 
   # PROPOSED (status=proposed, no code yet) — see SPEC.md 4.2-ب
   double_touch_confidence_multiplier:
