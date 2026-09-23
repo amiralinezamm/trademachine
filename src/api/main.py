@@ -1,6 +1,7 @@
 import os
+import threading
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import asyncpg
 from dotenv import load_dotenv
@@ -8,11 +9,12 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from src.engine.level_reversion import check_level_reversion, load_rule_params
+from src.engine.level_reversion import apply_spacing_filter, check_level_reversion, load_rule_params
 from src.engine.signal_store import (
     fetch_active_levels,
     fetch_atr_at,
     fetch_latest_closed_candle,
+    fetch_last_signal_for_direction,
     insert_signal,
 )
 from src.features.levels import compute_levels, load_levels_params
@@ -38,7 +40,10 @@ async def lifespan(app: FastAPI):
     await app.state.pool.close()
 
 
+from src.api.admin_router import router as admin_router
+
 app = FastAPI(title="XAUUSD Trader Bot API", lifespan=lifespan)
+app.include_router(admin_router)
 
 
 
@@ -243,13 +248,13 @@ async def ingest_candles(payload: CandlesIngestRequest):
     return {"received": len(payload.candles), "closed": len(closed), "skipped_unclosed": len(payload.candles) - len(closed)}
 
 
-def _compute_and_store_levels_sync(symbol: str, tf: str, as_of_ts: datetime) -> dict:
+def _compute_and_store_levels_sync(symbol: str, tf: str, as_of_ts: datetime, lookback_bars: int | None = None) -> dict:
     """Sync (psycopg2) on purpose — compute_levels() is CPU-bound over
     potentially years of candles; run via threadpool below so it doesn't
     block the event loop."""
     conn = get_connection()
     try:
-        candles = fetch_candles(conn, symbol, tf, as_of_ts)
+        candles = fetch_candles(conn, symbol, tf, as_of_ts, lookback_bars=lookback_bars)
         levels = compute_levels(candles, as_of_ts, symbol, tf)
         write_result = upsert_levels(conn, levels)
         conn.commit()
@@ -268,6 +273,7 @@ async def compute_levels_endpoint(
     symbol: str = Query(...),
     tf: str = Query("M5"),
     as_of: str = Query(..., description="ISO-8601 timestamp, e.g. 2026-09-11T12:30:00Z"),
+    lookback_bars: int | None = Query(None, description="Limit to the most recent N candles; None = full history (default, required for backtest)"),
 ):
     """SPEC.md 4.2. Recomputes the full levels state as of `as_of` from raw
     candles (CLAUDE.md rule 6: same function backtest and live) and upserts
@@ -283,7 +289,7 @@ async def compute_levels_endpoint(
     if tf not in allowed_tfs:
         raise HTTPException(status_code=422, detail=f"tf must be one of {allowed_tfs}")
 
-    return await run_in_threadpool(_compute_and_store_levels_sync, symbol, tf, ts)
+    return await run_in_threadpool(_compute_and_store_levels_sync, symbol, tf, ts, lookback_bars)
 
 
 def _check_signal_sync(symbol: str, tf: str) -> dict:
@@ -309,6 +315,16 @@ def _check_signal_sync(symbol: str, tf: str) -> dict:
             high=float(candle["high"]), low=float(candle["low"]),
             close=float(candle["close"]), atr=atr, levels=levels,
         )
+        if signal is not None:
+            # same-direction spacing filter (Rule: same_direction_spacing_filter)
+            _rule_params = load_rule_params()
+            _min_spacing = float(_rule_params.get("min_same_direction_spacing_usd", 10.0))
+            _prev = fetch_last_signal_for_direction(
+                conn, signal["direction"], candle["ts_utc"]
+            )
+            signal = apply_spacing_filter(
+                signal, float(candle["close"]), _prev, _min_spacing
+            )
         if signal is None:
             return {"signal": None, "as_of": candle["ts_utc"].isoformat()}
 
@@ -415,10 +431,10 @@ from src.features.patterns_store import (
 )
 
 
-def _compute_and_store_patterns_sync(symbol: str, tf: str, ts) -> dict:
+def _compute_and_store_patterns_sync(symbol: str, tf: str, ts, lookback_bars: int | None = None) -> dict:
     conn = get_connection()
     try:
-        candles = fetch_candles_for_patterns(conn, symbol, tf, ts)
+        candles = fetch_candles_for_patterns(conn, symbol, tf, ts, lookback_bars=lookback_bars)
         levels = fetch_active_levels_for_patterns(conn, symbol, tf)
         hits = compute_patterns(candles, ts, symbol, tf, levels=levels)
         result = upsert_pattern_hits(conn, hits)
@@ -441,6 +457,7 @@ async def compute_patterns_endpoint(
     symbol: str = Query(...),
     tf: str = Query("M5"),
     as_of: str = Query(..., description="ISO-8601 timestamp"),
+    lookback_bars: int | None = Query(None, description="Limit to the most recent N candles; None = full history (default)"),
 ):
     """SPEC.md 4.3. Detect all 61 TA-Lib CDL patterns up to as_of and
     upsert into pattern_hits. Levels context (at_level_id, level_strength)
@@ -454,7 +471,7 @@ async def compute_patterns_endpoint(
     allowed_tfs = load_levels_params()["timeframes"]
     if tf not in allowed_tfs:
         raise HTTPException(status_code=422, detail=f"tf must be one of {allowed_tfs}")
-    return await run_in_threadpool(_compute_and_store_patterns_sync, symbol, tf, ts)
+    return await run_in_threadpool(_compute_and_store_patterns_sync, symbol, tf, ts, lookback_bars)
 
 # ---------------------------------------------------------------------------
 # Round numbers (SPEC.md 4.4)
@@ -467,10 +484,10 @@ from src.features.round_numbers_store import (
 )
 
 
-def _compute_and_store_round_numbers_sync(symbol: str, tf: str, ts: datetime) -> dict:
+def _compute_and_store_round_numbers_sync(symbol: str, tf: str, ts: datetime, lookback_bars: int | None = None) -> dict:
     conn = get_connection()
     try:
-        candles = fetch_candles_with_volume(conn, symbol, tf, ts)
+        candles = fetch_candles_with_volume(conn, symbol, tf, ts, lookback_bars=lookback_bars)
         hits = compute_round_numbers(candles, ts, symbol, tf)
         result = upsert_round_number_hits(conn, hits)
         conn.commit()
@@ -492,6 +509,7 @@ async def compute_round_numbers_endpoint(
     symbol: str = Query(...),
     tf: str = Query("M5"),
     as_of: str = Query(..., description="ISO-8601 timestamp"),
+    lookback_bars: int | None = Query(None, description="Limit to the most recent N candles; None = full history (default)"),
 ):
     """SPEC.md 4.4. Compute round-number hit events up to as_of and upsert
     into round_number_hits. Returns counts by state."""
@@ -501,7 +519,7 @@ async def compute_round_numbers_endpoint(
         raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
-    return await run_in_threadpool(_compute_and_store_round_numbers_sync, symbol, tf, ts)
+    return await run_in_threadpool(_compute_and_store_round_numbers_sync, symbol, tf, ts, lookback_bars)
 
 
 @app.get("/round_numbers/acceptance")
@@ -530,10 +548,10 @@ from src.features.gaps_store import (
 )
 
 
-def _compute_and_store_gaps_sync(symbol: str, tf: str, ts: datetime) -> dict:
+def _compute_and_store_gaps_sync(symbol: str, tf: str, ts: datetime, lookback_bars: int | None = None) -> dict:
     conn = get_connection()
     try:
-        candles = fetch_candles_gaps(conn, symbol, tf, ts)
+        candles = fetch_candles_gaps(conn, symbol, tf, ts, lookback_bars=lookback_bars)
         params  = load_gaps_params()
         gaps    = compute_gaps(candles, ts, symbol, tf, params=params)
         result  = upsert_gaps(conn, gaps)
@@ -564,6 +582,7 @@ async def compute_gaps_endpoint(
     symbol: str = Query(...),
     tf: str = Query("M5"),
     as_of: str = Query(..., description="ISO-8601 timestamp"),
+    lookback_bars: int | None = Query(None, description="Limit to the most recent N candles; None = full history (default)"),
 ):
     """SPEC.md 4.5. Compute gaps up to as_of and upsert into gaps table."""
     try:
@@ -572,7 +591,7 @@ async def compute_gaps_endpoint(
         raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
-    return await run_in_threadpool(_compute_and_store_gaps_sync, symbol, tf, ts)
+    return await run_in_threadpool(_compute_and_store_gaps_sync, symbol, tf, ts, lookback_bars)
 
 
 @app.post("/gaps/backtest")
@@ -621,10 +640,10 @@ from src.features.fibonacci_store import (
 )
 
 
-def _compute_and_store_fibonacci_sync(symbol: str, tf: str, ts: datetime) -> dict:
+def _compute_and_store_fibonacci_sync(symbol: str, tf: str, ts: datetime, lookback_bars: int | None = None) -> dict:
     conn = get_connection()
     try:
-        candles = fetch_candles(conn, symbol, tf, ts)
+        candles = fetch_candles(conn, symbol, tf, ts, lookback_bars=lookback_bars)
         active_levels = fetch_active_levels_for_fib(conn, symbol, tf, ts)
         zones = compute_fibonacci(candles, ts, symbol, tf, active_levels)
         result = upsert_fibonacci_zones(conn, zones)
@@ -648,6 +667,7 @@ async def compute_fibonacci_endpoint(
     symbol: str = Query(...),
     tf: str = Query("M5"),
     as_of: str = Query(..., description="ISO-8601 timestamp"),
+    lookback_bars: int | None = Query(None, description="Limit to the most recent N candles; None = full history (default)"),
 ):
     """SPEC.md 4.6. Compute Fibonacci zones from active levels as of as_of
     and upsert into fibonacci_zones. Swings are read from the levels table
@@ -659,7 +679,7 @@ async def compute_fibonacci_endpoint(
         raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
-    return await run_in_threadpool(_compute_and_store_fibonacci_sync, symbol, tf, ts)
+    return await run_in_threadpool(_compute_and_store_fibonacci_sync, symbol, tf, ts, lookback_bars)
 
 
 @app.get("/fibonacci/zones")
@@ -695,44 +715,151 @@ from src.features.regime_store import (
     fetch_regime_snapshots,
 )
 
+_REGIME_FULL_LOCK = threading.Lock()
+_REGIME_INCR_LOCK = threading.Lock()
+
+# M5 = 5 min/bar; keyed by tf string for future flexibility
+_TF_MINUTES = {"M1": 1, "M5": 5, "M15": 15, "H1": 60}
+
 
 def _compute_and_store_regime_sync(symbol: str, tf: str, ts: datetime) -> dict:
-    conn = get_connection()
+    """Full recompute — loads ALL candles. Guarded by _REGIME_FULL_LOCK."""
+    if not _REGIME_FULL_LOCK.acquire(blocking=False):
+        raise RuntimeError("regime/compute (full) already running — retry later")
     try:
-        candles = fetch_candles(conn, symbol, tf, ts)
-        result = compute_regime(candles, ts, symbol, tf)
-        write = upsert_regime_snapshots(conn, result["snapshots"])
-        conn.commit()
-        regime_counts: dict = {}
-        for s in result["snapshots"]:
-            regime_counts[s["regime"]] = regime_counts.get(s["regime"], 0) + 1
-        return {
-            "symbol": symbol, "tf": tf, "as_of": ts.isoformat(),
-            "snapshot_count": len(result["snapshots"]),
-            "regime_counts": regime_counts,
-            "breakout_prob": result["breakout_prob"],
-            **write,
-        }
+        conn = get_connection()
+        try:
+            candles = fetch_candles(conn, symbol, tf, ts)
+            result = compute_regime(candles, ts, symbol, tf)
+            write = upsert_regime_snapshots(conn, result["snapshots"])
+            conn.commit()
+            regime_counts: dict = {}
+            for s in result["snapshots"]:
+                regime_counts[s["regime"]] = regime_counts.get(s["regime"], 0) + 1
+            return {
+                "symbol": symbol, "tf": tf, "as_of": ts.isoformat(),
+                "snapshot_count": len(result["snapshots"]),
+                "regime_counts": regime_counts,
+                "breakout_prob": result["breakout_prob"],
+                **write,
+            }
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        _REGIME_FULL_LOCK.release()
+
+
+def _compute_and_store_regime_incremental_sync(symbol: str, tf: str, ts: datetime) -> dict:
+    """Incremental recompute — loads only the lookback window needed.
+
+    Strategy: find the last snapshot ts, load (min_bars + buffer) candles
+    before it as context, compute regime for that window, upsert only the
+    bars newer than the last snapshot.  Memory: O(1025 bars) instead of
+    O(all history).
+    """
+    if not _REGIME_INCR_LOCK.acquire(blocking=False):
+        raise RuntimeError("regime/compute/incremental already running — retry later")
+    try:
+        params = load_regime_params()
+        min_bars = (
+            max(params["adx_period"], params["bb_period"])
+            + params["bb_width_pct_window"]
+            + 5
+        )
+        tf_min = _TF_MINUTES.get(tf, 5)
+
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT MAX(ts_utc) FROM regime_snapshots"
+                    " WHERE symbol=%s AND tf_origin=%s",
+                    (symbol, tf),
+                )
+                last_ts = cur.fetchone()[0]
+
+            if last_ts is None:
+                return {
+                    "symbol": symbol, "tf": tf, "as_of": ts.isoformat(),
+                    "snapshot_count": 0, "new_snapshots": 0,
+                    "note": "no_prior_snapshots_run_full_first",
+                }
+
+            window_start = last_ts - timedelta(minutes=min_bars * tf_min * 3)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT ts_utc, open, high, low, close
+                       FROM candles
+                       WHERE symbol=%s AND tf=%s
+                         AND ts_utc >= %s AND ts_utc <= %s
+                       ORDER BY ts_utc""",
+                    (symbol, tf, window_start, ts),
+                )
+                cols = [d[0] for d in cur.description]
+                candles = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+            result = compute_regime(candles, ts, symbol, tf, params=params)
+
+            new_snaps = [s for s in result["snapshots"] if s["ts_utc"] > last_ts]
+            if new_snaps:
+                write = upsert_regime_snapshots(conn, new_snaps)
+                conn.commit()
+            else:
+                write = {"inserted": 0, "updated": 0}
+
+            return {
+                "symbol": symbol, "tf": tf, "as_of": ts.isoformat(),
+                "candle_window": len(candles),
+                "snapshot_count": len(result["snapshots"]),
+                "new_snapshots": len(new_snaps),
+                **write,
+            }
+        finally:
+            conn.close()
+    finally:
+        _REGIME_INCR_LOCK.release()
 
 
 @app.post("/regime/compute")
+@app.post("/regime/compute/full")
 async def compute_regime_endpoint(
     symbol: str = Query(...),
     tf: str = Query("M5"),
     as_of: str = Query(..., description="ISO-8601 timestamp"),
 ):
-    """SPEC.md 4.9. Classify each bar as trend/range/gray using ADX+BB
-    percentile rule, compute range duration distribution by hour/session
-    and breakout probability curve, upsert all snapshots into regime_snapshots."""
+    """SPEC.md 4.9. Full recompute — DISABLED via HTTP (causes OOM on 213k candles).
+    Use /regime/compute/incremental for the timer.
+    For a one-off full rebuild, run: python3 scripts/compute_regime_full.py"""
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "regime/compute (full) is disabled via HTTP to prevent OOM. "
+            "Use /regime/compute/incremental for timer use. "
+            "For one-off full rebuild run scripts/compute_regime_full.py on the server."
+        ),
+    )
+
+
+@app.post("/regime/compute/incremental")
+async def compute_regime_incremental_endpoint(
+    symbol: str = Query(...),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """Incremental regime update — loads only the context window (~1025 bars).
+    Use this from the systemd timer every 5 minutes instead of the full endpoint."""
     try:
         ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
     except ValueError:
         raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
-    return await run_in_threadpool(_compute_and_store_regime_sync, symbol, tf, ts)
+    try:
+        return await run_in_threadpool(_compute_and_store_regime_incremental_sync, symbol, tf, ts)
+    except RuntimeError as exc:
+        if "already running" in str(exc):
+            raise HTTPException(status_code=503, detail=str(exc))
+        raise
 
 
 @app.get("/regime/latest")

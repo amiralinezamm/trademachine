@@ -27,19 +27,38 @@ def get_connection():
 
 
 def fetch_candles_with_volume(
-    conn, symbol: str, tf: str, as_of_ts: datetime
+    conn, symbol: str, tf: str, as_of_ts: datetime,
+    lookback_bars: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Candles including tick_volume, up to as_of_ts."""
+    """Candles including tick_volume, up to as_of_ts.
+
+    lookback_bars: when set, fetches only the most recent N bars. None
+    (default) fetches the full history — required by backtest callers.
+    """
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT ts_utc, open, high, low, close, tick_volume
-            FROM candles
-            WHERE symbol = %s AND tf = %s AND ts_utc <= %s
-            ORDER BY ts_utc
-            """,
-            (symbol, tf, as_of_ts),
-        )
+        if lookback_bars is None:
+            cur.execute(
+                """
+                SELECT ts_utc, open, high, low, close, tick_volume
+                FROM candles
+                WHERE symbol = %s AND tf = %s AND ts_utc <= %s
+                ORDER BY ts_utc
+                """,
+                (symbol, tf, as_of_ts),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT ts_utc, open, high, low, close, tick_volume FROM (
+                    SELECT ts_utc, open, high, low, close, tick_volume
+                    FROM candles
+                    WHERE symbol = %s AND tf = %s AND ts_utc <= %s
+                    ORDER BY ts_utc DESC
+                    LIMIT %s
+                ) sub ORDER BY ts_utc ASC
+                """,
+                (symbol, tf, as_of_ts, lookback_bars),
+            )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
 

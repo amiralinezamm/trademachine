@@ -215,3 +215,66 @@ def test_off_hours_boundary_hour17_suppressed():
     """Hour 17 IS off hours — resistance suppressed."""
     result = _sig_at_hour(17, kind="resistance")
     assert result is None
+
+
+# ── same_direction_spacing_filter tests ──────────────────────────────────────
+from src.engine.level_reversion import apply_spacing_filter
+
+
+def _make_signal(direction: str, entry: float) -> dict:
+    return {"direction": direction, "entry": entry}
+
+
+def _prev(entry: float, outcome=None) -> dict:
+    return {"entry": entry, "outcome": outcome}
+
+
+def test_spacing_same_dir_too_close_open_rejected():
+    """BUY $5 apart, previous open → second rejected."""
+    sig = _make_signal("BUY", 2000.0)
+    result = apply_spacing_filter(sig, 2000.0, _prev(1995.0, outcome=None), 10.0)
+    assert result is None, "should be rejected (|2000-1995|=5 < 10)"
+
+
+def test_spacing_same_dir_far_enough_open_allowed():
+    """BUY $15 apart, previous open → second allowed."""
+    sig = _make_signal("BUY", 2000.0)
+    result = apply_spacing_filter(sig, 2000.0, _prev(1985.0, outcome=None), 10.0)
+    assert result is sig, "should pass (|2000-1985|=15 >= 10)"
+
+
+def test_spacing_same_dir_too_close_prev_closed_allowed():
+    """BUY $5 apart but previous has outcome=tp → allowed (prior closed)."""
+    sig = _make_signal("BUY", 2000.0)
+    result = apply_spacing_filter(sig, 2000.0, _prev(1995.0, outcome="tp"), 10.0)
+    assert result is sig, "should pass (prior closed with tp)"
+
+
+def test_spacing_opposite_dir_no_restriction():
+    """BUY + SELL $2 apart → spacing rule does not apply across directions."""
+    sell_sig = _make_signal("SELL", 2002.0)
+    # prev_same_dir for SELL is None (no prior SELL); BUY signal doesn't count
+    result = apply_spacing_filter(sell_sig, 2002.0, None, 10.0)
+    assert result is sell_sig, "should pass (no prior SELL signal)"
+
+
+def test_spacing_prev_closed_any_outcome_allowed():
+    """Any non-None outcome (sl, level_invalidated, timeout) lifts restriction."""
+    for outcome in ("sl", "level_invalidated", "timeout"):
+        sig = _make_signal("SELL", 2000.0)
+        result = apply_spacing_filter(sig, 2000.0, _prev(1995.0, outcome=outcome), 10.0)
+        assert result is sig, f"should pass with outcome={outcome}"
+
+
+def test_spacing_exact_threshold_rejected():
+    """Exactly $9.99 apart → rejected (< 10.0)."""
+    sig = _make_signal("BUY", 2000.0)
+    result = apply_spacing_filter(sig, 2000.0, _prev(1990.01, outcome=None), 10.0)
+    assert result is None, "|2000-1990.01|=9.99 < 10 → reject"
+
+
+def test_spacing_exact_threshold_allowed():
+    """Exactly $10.0 apart → allowed (>= 10.0)."""
+    sig = _make_signal("BUY", 2000.0)
+    result = apply_spacing_filter(sig, 2000.0, _prev(1990.0, outcome=None), 10.0)
+    assert result is sig, "|2000-1990|=10.0 >= 10 → allow"

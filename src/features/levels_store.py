@@ -25,19 +25,40 @@ def get_connection():
     )
 
 
-def fetch_candles(conn, symbol: str, tf: str, as_of_ts: datetime) -> list[dict[str, Any]]:
-    """All closed candles up to as_of_ts — the as_of_ts cutoff is enforced
-    again inside compute_levels() itself, this is just an efficiency filter."""
+def fetch_candles(
+    conn, symbol: str, tf: str, as_of_ts: datetime,
+    lookback_bars: int | None = None,
+) -> list[dict[str, Any]]:
+    """All closed candles up to as_of_ts.
+
+    lookback_bars: when set, fetches only the most recent N bars (DESC LIMIT
+    then reversed to ASC). None (default) fetches the full history — required
+    by replay/backtest callers; never pass a number there.
+    """
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT ts_utc, open, high, low, close
-            FROM candles
-            WHERE symbol = %s AND tf = %s AND ts_utc <= %s
-            ORDER BY ts_utc
-            """,
-            (symbol, tf, as_of_ts),
-        )
+        if lookback_bars is None:
+            cur.execute(
+                """
+                SELECT ts_utc, open, high, low, close
+                FROM candles
+                WHERE symbol = %s AND tf = %s AND ts_utc <= %s
+                ORDER BY ts_utc
+                """,
+                (symbol, tf, as_of_ts),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT ts_utc, open, high, low, close FROM (
+                    SELECT ts_utc, open, high, low, close
+                    FROM candles
+                    WHERE symbol = %s AND tf = %s AND ts_utc <= %s
+                    ORDER BY ts_utc DESC
+                    LIMIT %s
+                ) sub ORDER BY ts_utc ASC
+                """,
+                (symbol, tf, as_of_ts, lookback_bars),
+            )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
 
