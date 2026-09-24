@@ -11,7 +11,7 @@ from typing import Any
 
 import psycopg2.extras
 
-TF_MINUTES = {"M1": 1, "M5": 5, "M15": 15, "H1": 60}
+TF_MINUTES = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
 
 
 def is_closed(ts_utc: datetime, tf: str, now_utc: datetime) -> bool:
