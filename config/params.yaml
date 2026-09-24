@@ -318,3 +318,30 @@ divergence:
   # standard definition for oscillator divergence. See final report.
   swing_n: 5            # bars required strictly higher/lower on each side to confirm a pivot
   lookback_bars: 100     # max bar distance between the two compared swings
+
+matrix:
+  # SPEC.md 4.10 (D18). Proposed until backtest acceptance criterion
+  # (score>=4 correlating >=0.3 with successful signal direction) is met.
+  tf_list: ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+  min_votes: 6          # of 10 indicators, for a timeframe to vote buy/sell
+  min_tf_agreement: 4   # of 6 non-M5 timeframes; fusion-layer threshold, not enforced here
+
+  # DESIGN DECISION: SPEC.md 4.10 names the 10 indicators and their role
+  # but not their periods -- standard TA-Lib textbook defaults used
+  # throughout, documented in src/features/matrix.py's module docstring
+  # alongside each indicator's vote convention.
+  indicator_periods:
+    rsi_period: 14
+    stoch_fastk: 14
+    stoch_slowk: 3
+    stoch_slowd: 3
+    cci_period: 14
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    ma_period: 20
+    adx_period: 14
+    willr_period: 14
+    momentum_period: 10
+    bbp_ema_period: 13   # Elder's Bulls/Bears Power original recommendation
+    volume_period: 20
