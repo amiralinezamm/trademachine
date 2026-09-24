@@ -799,6 +799,78 @@ async def get_recent_divergences(
     finally:
         conn.close()
 
+# ---------------------------------------------------------------------------
+# Matrix (PROPOSED module, SPEC.md 4.10, decision D18). Deliberately
+# isolated: NOT wired into module_voting_v1, check_level_reversion, or any
+# other live-signal path. rules registry id: matrix_score_mtf_agreement
+# (status=proposed).
+# ---------------------------------------------------------------------------
+from src.features.matrix import compute_matrix_score, load_matrix_params
+from src.features.matrix_store import (
+    fetch_candles_by_tf,
+    upsert_matrix_snapshot,
+    fetch_latest_matrix_snapshot,
+)
+
+
+def _compute_and_store_matrix_sync(symbol: str, ts: datetime, lookback_bars: int | None = None) -> dict:
+    conn = get_connection()
+    try:
+        params = load_matrix_params()
+        candles_by_tf = fetch_candles_by_tf(conn, symbol, params["tf_list"], ts, lookback_bars)
+        result = compute_matrix_score(candles_by_tf, ts, params)
+        upsert_matrix_snapshot(conn, symbol, ts, result)
+        conn.commit()
+        return {
+            "symbol": symbol, "as_of": ts.isoformat(),
+            "candle_counts": {tf: len(c) for tf, c in candles_by_tf.items()},
+            **result,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/matrix/compute")
+async def compute_matrix_endpoint(
+    symbol: str = Query(...),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+    lookback_bars: int | None = Query(2000, description="Bars per timeframe (each TF fetched independently); None = full history"),
+):
+    """PROPOSED module (SPEC.md 4.10, D18). Computes the 10-indicator vote
+    across all 7 timeframes as of `as_of`, anchors to M5, and upserts into
+    matrix_snapshots. Isolated: does not touch signals, levels, or
+    module_voting_v1."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return await run_in_threadpool(_compute_and_store_matrix_sync, symbol, ts, lookback_bars)
+
+
+@app.get("/matrix/latest")
+async def get_latest_matrix(
+    symbol: str = Query("XAUUSD@"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """Latest stored matrix_snapshots row at or before as_of."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    conn = get_connection()
+    try:
+        snap = fetch_latest_matrix_snapshot(conn, symbol, ts)
+        if snap is None:
+            raise HTTPException(status_code=404, detail="no matrix_snapshots row at or before as_of")
+        return snap
+    finally:
+        conn.close()
+
+
 
 # ---------------------------------------------------------------------------
 # Fibonacci (SPEC.md 4.6)
