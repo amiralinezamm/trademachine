@@ -679,6 +679,128 @@ async def get_open_gaps(
         conn.close()
 
 # ---------------------------------------------------------------------------
+# RSI + MACD divergence (PROPOSED module, not yet in SPEC.md -- see the
+# 2026-09-24 task report). Deliberately isolated: NOT wired into
+# module_voting_v1, check_level_reversion, or any other live-signal path.
+# rules registry ids: rsi_overbought_oversold, rsi_price_divergence,
+# macd_price_divergence (all status=proposed).
+# ---------------------------------------------------------------------------
+from src.features.rsi import (
+    compute_rsi_macd_snapshot,
+    compute_price_rsi_divergence,
+    compute_price_macd_divergence,
+    load_rsi_params,
+    load_macd_params,
+    load_divergence_params,
+)
+from src.features.rsi_store import (
+    fetch_candles as fetch_candles_rsi,
+    upsert_rsi_snapshots,
+    upsert_divergence_events,
+    fetch_latest_snapshot,
+    fetch_recent_divergences,
+)
+
+
+def _compute_and_store_rsi_sync(symbol: str, tf: str, ts: datetime, lookback_bars: int | None = None) -> dict:
+    conn = get_connection()
+    try:
+        candles = fetch_candles_rsi(conn, symbol, tf, ts, lookback_bars=lookback_bars)
+        rsi_params = load_rsi_params()
+        macd_params = load_macd_params()
+        divergence_params = load_divergence_params()
+
+        snapshot_rows = compute_rsi_macd_snapshot(candles, ts, symbol, tf, rsi_params, macd_params)
+        snap_result = upsert_rsi_snapshots(conn, snapshot_rows)
+
+        rsi_events = compute_price_rsi_divergence(candles, ts, symbol, tf, rsi_params, divergence_params)
+        macd_events = compute_price_macd_divergence(candles, ts, symbol, tf, macd_params, divergence_params)
+        div_result = upsert_divergence_events(conn, rsi_events + macd_events)
+
+        conn.commit()
+        by_state: dict = {}
+        for r in snapshot_rows:
+            by_state[r["rsi_state"]] = by_state.get(r["rsi_state"], 0) + 1
+        return {
+            "symbol": symbol, "tf": tf, "as_of": ts.isoformat(),
+            "snapshots": len(snapshot_rows),
+            "by_rsi_state": by_state,
+            "snapshots_upserted": snap_result["upserted"],
+            "divergences_found": {"price_rsi": len(rsi_events), "price_macd": len(macd_events)},
+            "divergences_inserted": div_result["inserted"],
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/rsi/compute")
+async def compute_rsi_endpoint(
+    symbol: str = Query(...),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+    lookback_bars: int | None = Query(None, description="Limit to the most recent N candles; None = full history (default)"),
+):
+    """PROPOSED module (no SPEC.md section yet). Computes RSI(14) + MACD(12,26,9)
+    up to as_of, upserts into rsi_snapshots, then runs both classic divergence
+    detectors (price/RSI, price/MACD) and upserts hits into divergence_events.
+    Isolated: does not touch signals, levels, or module_voting_v1."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return await run_in_threadpool(_compute_and_store_rsi_sync, symbol, tf, ts, lookback_bars)
+
+
+@app.get("/rsi/latest")
+async def get_latest_rsi(
+    symbol: str = Query("XAUUSD@"),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+):
+    """Latest stored RSI/MACD snapshot at or before as_of."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    conn = get_connection()
+    try:
+        snap = fetch_latest_snapshot(conn, symbol, tf, ts)
+        if snap is None:
+            raise HTTPException(status_code=404, detail="no rsi_snapshots row at or before as_of")
+        return snap
+    finally:
+        conn.close()
+
+
+@app.get("/rsi/divergences")
+async def get_recent_divergences(
+    symbol: str = Query("XAUUSD@"),
+    tf: str = Query("M5"),
+    as_of: str = Query(..., description="ISO-8601 timestamp"),
+    kind: str | None = Query(None, description="'price_rsi' or 'price_macd'; omit for both"),
+    limit: int = Query(20, le=200),
+):
+    """Recent divergence_events at or before as_of, most recent first."""
+    try:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="as_of must be a valid ISO-8601 timestamp")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    if kind is not None and kind not in ("price_rsi", "price_macd"):
+        raise HTTPException(status_code=422, detail="kind must be 'price_rsi' or 'price_macd'")
+    conn = get_connection()
+    try:
+        return fetch_recent_divergences(conn, symbol, tf, ts, kind=kind, limit=limit)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Fibonacci (SPEC.md 4.6)
 # ---------------------------------------------------------------------------
 from src.features.fibonacci import compute_fibonacci, load_fibonacci_params
