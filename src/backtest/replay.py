@@ -453,8 +453,12 @@ def _upsert_signal(conn, signal: dict, sl: float, tp: float,
                confidence, components, rule_version, outcome, pnl_usd)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (ts_utc, rule_version) DO UPDATE
-              SET stop_loss  = EXCLUDED.stop_loss,
+              SET direction   = EXCLUDED.direction,
+                  entry       = EXCLUDED.entry,
+                  stop_loss   = EXCLUDED.stop_loss,
                   take_profit = EXCLUDED.take_profit,
+                  confidence  = EXCLUDED.confidence,
+                  components  = EXCLUDED.components,
                   outcome     = EXCLUDED.outcome,
                   pnl_usd     = EXCLUDED.pnl_usd
             """,
