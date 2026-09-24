@@ -34,6 +34,7 @@ def check_level_reversion(
     atr: float,
     levels: list[dict[str, Any]],
     params: dict[str, Any] | None = None,
+    structure: str | None = None,
 ) -> dict[str, Any] | None:
     """levels: rows from the `levels` table (dicts with at least kind,
     price_low, price_high, strength, status). Returns a signal dict ready
@@ -47,6 +48,12 @@ def check_level_reversion(
     The margin reuses levels.break_atr_mult semantics: same numeric value (0.5),
     same idea of "close must clear the zone by a non-trivial distance".
     This prevents repeat-fire and rules out tangential closes at the zone edge.
+
+    structure: "bullish"/"bearish"/"unknown"/None, from
+    market_structure.compute_market_structure() (or structure_from_swings()
+    in replay). None behaves like "unknown" -- no filtering (rule
+    market_structure_filter, roadmap-rev2 4.4). BUY is blocked when
+    structure=="bearish"; SELL is blocked when structure=="bullish".
     """
     if params is None:
         params = load_rule_params()
@@ -84,8 +91,16 @@ def check_level_reversion(
         if lvl["kind"] == "support":
             if not (close > hi + margin):   # rebounded meaningfully above zone
                 continue
+            # market_structure_filter (roadmap-rev2 4.4): don't BUY into a
+            # confirmed bearish H1 structure.
+            if structure == "bearish":
+                continue
         else:                               # fell back meaningfully below zone
             if not (close < lo - margin):
+                continue
+            # market_structure_filter: don't SELL into a confirmed bullish
+            # H1 structure.
+            if structure == "bullish":
                 continue
 
         mid = (lo + hi) / 2
@@ -122,3 +137,32 @@ def check_level_reversion(
             "close": close,
         },
     }
+
+
+def apply_spacing_filter(
+    signal: "dict[str, Any] | None",
+    entry_price: float,
+    prev_same_dir: "dict[str, Any] | None",
+    min_spacing_usd: float,
+) -> "dict[str, Any] | None":
+    """Same-direction spacing filter (Rule: same_direction_spacing_filter).
+
+    Rejects `signal` (returns None) when ALL of these hold:
+      - prev_same_dir is not None (a prior same-direction signal exists)
+      - prev_same_dir['outcome'] is None (the prior position is still open)
+      - |entry_price - prev_same_dir['entry']| < min_spacing_usd
+
+    Interpretation used: any non-None outcome (tp, sl, level_invalidated,
+    timeout) counts as "closed" — restriction is lifted.  If the prior signal
+    carries a non-None outcome for any of these reasons, the new signal is
+    allowed without a spacing check.
+    """
+    if signal is None:
+        return None
+    if prev_same_dir is None:
+        return signal
+    if prev_same_dir.get("outcome") is not None:
+        return signal          # prior position is closed — no restriction
+    if abs(entry_price - float(prev_same_dir["entry"])) < min_spacing_usd:
+        return None            # rejected: too close to an open same-dir signal
+    return signal

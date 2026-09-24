@@ -483,7 +483,11 @@ def run_backtest(
     dry_run=True prints stats without writing to DB.
     Returns summary dict.
     """
-    from src.engine.level_reversion import check_level_reversion, load_rule_params
+    from src.engine.level_reversion import apply_spacing_filter, check_level_reversion, load_rule_params
+    from src.engine.market_structure import (
+        _resample_to_h1, detect_h1_swings, load_structure_params, structure_from_swings,
+    )
+    from src.engine.module_voting import compute_votes, load_voting_params
     from src.features.levels_store import get_connection
 
     costs = load_costs()
@@ -495,6 +499,8 @@ def run_backtest(
     atr_period = load_atr_period()
     break_mult = load_break_atr_mult()
     rule_params = load_rule_params()
+    _min_spacing_usd = float(rule_params.get("min_same_direction_spacing_usd", 10.0))
+    _last_by_dir: dict[str, dict] = {}  # {direction: {entry, outcome}} anti-lookahead
 
     log.info("Connecting to DB…")
     conn = get_connection()
@@ -510,6 +516,12 @@ def run_backtest(
         lows   = np.array([float(c["low"])   for c in candles])
         closes = np.array([float(c["close"]) for c in candles])
         atr_arr = talib.ATR(highs, lows, closes, timeperiod=atr_period)
+
+        log.info("Pre-computing H1 market structure (market_structure_filter)…")
+        _structure_params = load_structure_params()
+        _h1_candles = _resample_to_h1(candles)
+        _h1_swings = detect_h1_swings(_h1_candles, _structure_params)
+        log.info("  %d H1 bars, %d confirmed swings", len(_h1_candles), len(_h1_swings))
 
         log.info("Pre-fetching module outputs…")
         all_levels = _fetch_all_levels(conn, symbol, tf)
@@ -527,7 +539,8 @@ def run_backtest(
         # Sort gap list (already ordered by ts_utc from query, but ensure)
         all_gaps.sort(key=lambda r: r["ts_utc"])
 
-        stats = {"total": 0, "signals": 0,
+        _voting_params = load_voting_params()
+        stats = {"total": 0, "signals": 0, "votes_rejected": 0,
                  "tp": 0, "sl": 0, "level_invalidated": 0, "timeout": 0, "open": 0}
         BATCH = 200
         batch_signals = []
@@ -560,12 +573,21 @@ def run_backtest(
                                    "touch_count": tc, "break_count": bc})
             if not pit_levels:
                 continue
+            _structure = structure_from_swings(_h1_swings, ts, close)["structure"]
             signal = check_level_reversion(
                 symbol=symbol, tf=tf, ts_utc=ts,
                 high=high, low=low,
                 close=close, atr=float(atr), levels=pit_levels,
-                params=rule_params,
+                params=rule_params, structure=_structure,
             )
+            if signal is None:
+                continue
+
+            # same-direction spacing filter — use NEXT bar's open (actual replay entry)
+            next_c = candles[i + 1]
+            entry = float(next_c["open"])
+            _prev = _last_by_dir.get(signal["direction"])
+            signal = apply_spacing_filter(signal, entry, _prev, _min_spacing_usd)
             if signal is None:
                 continue
 
@@ -574,10 +596,17 @@ def run_backtest(
                 close, float(atr), ts,
             )
             signal["components"].update(ctx)
+            signal["components"]["market_structure"] = _structure
 
-            # Entry at OPEN of the NEXT bar (dام #4)
-            next_c = candles[i + 1]
-            entry = float(next_c["open"])
+            # module_voting_v1: aggregate per-module votes; suppress if below threshold.
+            _vote_result = compute_votes(signal["components"], signal["direction"], _voting_params)
+            signal["components"]["votes"] = _vote_result["votes"]
+            signal["components"]["net_votes"] = _vote_result["net_votes"]
+            if _vote_result["net_votes"] < _voting_params.get("min_net_votes", 2):
+                stats["votes_rejected"] += 1
+                continue
+
+            # Entry already set above (dام #4: open of the NEXT bar)
             cost = total_cost(c.get("spread"), ts, in_news_window=False, costs=costs)
 
             direction = signal["direction"]
@@ -597,6 +626,7 @@ def run_backtest(
             pnl = _pnl(direction, entry, exit_price, cost)
 
             signal["entry"] = entry
+            _last_by_dir[signal["direction"]] = {"entry": entry, "outcome": outcome}
             stats["signals"] += 1
             stats[outcome] += 1
 

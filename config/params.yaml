@@ -96,6 +96,7 @@ levels:
   zone_width_atr_mult: 0.25   # total zone width = this * ATR at birth
   break_atr_mult: 0.5         # candle must CLOSE this many ATRs beyond the zone to count as a valid break
   merge_atr_mult: 1.0         # zones (same kind) closer than this * ATR are merged into one
+  max_zone_width_atr_mult: 2.0  # cap merged zone width -- prevents a zone chasing price in a trend (2026-09-24 live bug)
 
   strength_lambda: 0.0015     # M5 decay rate; half-life ~460 bars (~40 trading hours)
 
@@ -134,6 +135,30 @@ patterns:
   # Distance from candle mid to level zone mid, in ATR multiples, for the
   # at_level_id linkage (pattern is "at a level" if within this threshold).
   at_level_distance_atr_mult: 0.5
+
+market_structure:
+  # roadmap-rev2 4.4 -- H1 structure (higher-high/higher-low = bullish,
+  # lower-high/lower-low = bearish). H1 bars are resampled on the fly from
+  # the M5 candle history (see src/engine/market_structure.py docstring --
+  # H1 ingestion has been stale since 2026-09-15, tracked separately).
+  # Smaller swing_n than the M5 levels detector (5) since H1 has far fewer
+  # bars per unit time -- 3 confirmed bars each side is ~3h lookback.
+  swing_n: 3
+  swing_k: 1.0
+  atr_period: 14
+
+module_voting:
+  # module_voting_v1 -- interim vote-aggregation framework ahead of the
+  # phase-4 fusion layer. min_net_votes is a GUESS, not backtested --
+  # explicitly called out for the replay comparison.
+  min_net_votes: 2
+  weights:
+    structure: 1.0
+    round_numbers: 1.0
+    fibonacci: 1.0
+    gaps: 1.0
+    patterns: 1.0
+    dollar_correlation: 1.0
 
 signal_rules:
   level_reversion:

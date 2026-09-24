@@ -20,6 +20,8 @@ from src.engine.signal_store import (
 from src.features.levels import compute_levels, load_levels_params
 from src.features.levels_store import fetch_candles, get_connection, upsert_levels
 from src.ingest.candles_store import TF_MINUTES, filter_closed_candles
+from src.engine.market_structure import compute_market_structure
+from src.engine.module_voting import compute_votes, load_voting_params
 from src.news.blackout import compute_blackout, get_blackout_status
 
 load_dotenv()
@@ -336,10 +338,18 @@ def _check_signal_sync(symbol: str, tf: str) -> dict:
             return {"signal": None, "as_of": candle["ts_utc"].isoformat(), "reason": "blackout"}
 
         levels = fetch_active_levels(conn, symbol, tf, candle["ts_utc"])
+
+        # market_structure_filter (roadmap-rev2 4.4): H1 structure, resampled
+        # from M5 (H1 ingestion stale, tracked separately -- see market_structure.py).
+        # 2000 M5 bars (~7 days) is comfortably more than the H1 swing detector needs.
+        _structure_candles = fetch_candles(conn, symbol, tf, candle["ts_utc"], lookback_bars=2000)
+        _structure = compute_market_structure(_structure_candles, candle["ts_utc"])
+
         signal = check_level_reversion(
             symbol=symbol, tf=tf, ts_utc=candle["ts_utc"],
             high=float(candle["high"]), low=float(candle["low"]),
             close=float(candle["close"]), atr=atr, levels=levels,
+            structure=_structure["structure"],
         )
         if signal is not None:
             # same-direction spacing filter (Rule: same_direction_spacing_filter)
@@ -364,6 +374,19 @@ def _check_signal_sync(symbol: str, tf: str) -> dict:
             float(candle["close"]), atr,
         )
         signal["components"].update(ctx)
+        signal["components"]["market_structure"] = _structure["structure"]
+
+        # module_voting_v1: aggregate per-module votes; suppress signal if
+        # net_votes is below the configured threshold.
+        _voting_params = load_voting_params()
+        _vote_result = compute_votes(signal["components"], signal["direction"], _voting_params)
+        signal["components"]["votes"] = _vote_result["votes"]
+        signal["components"]["net_votes"] = _vote_result["net_votes"]
+        if _vote_result["net_votes"] < _voting_params.get("min_net_votes", 2):
+            return {
+                "signal": None, "as_of": candle["ts_utc"].isoformat(),
+                "reason": "insufficient_votes", "net_votes": _vote_result["net_votes"],
+            }
 
         signal_id = insert_signal(conn, signal)
         conn.commit()

@@ -41,6 +41,32 @@ def _zone_gap(a_lo: float, a_hi: float, b_lo: float, b_hi: float) -> float:
     return max(a_lo, b_lo) - min(a_hi, b_hi)
 
 
+def _confirm_swing(highs, lows, atr, swing_idx: int, N: int, k: float) -> tuple[bool, bool]:
+    """Swing-high / swing-low confirmation at swing_idx: structural extreme
+    over N bars each side + retracement >= k * ATR. Same math used by
+    compute_levels()'s walk-forward loop and by market_structure.py's
+    higher-timeframe structure detector (CLAUDE.md rule 6 — one swing
+    definition, shared, not reimplemented)."""
+    before_hi = highs[swing_idx - N:swing_idx]
+    after_hi  = highs[swing_idx + 1:swing_idx + N + 1]
+    before_lo = lows[swing_idx - N:swing_idx]
+    after_lo  = lows[swing_idx + 1:swing_idx + N + 1]
+
+    is_high = False
+    if highs[swing_idx] > before_hi.max() and highs[swing_idx] > after_hi.max():
+        retrace = highs[swing_idx] - after_lo.min()
+        if retrace >= k * atr[swing_idx]:
+            is_high = True
+
+    is_low = False
+    if lows[swing_idx] < before_lo.min() and lows[swing_idx] < after_lo.min():
+        retrace = after_hi.max() - lows[swing_idx]
+        if retrace >= k * atr[swing_idx]:
+            is_low = True
+
+    return is_high, is_low
+
+
 def _add_or_merge(
     levels: list[dict[str, Any]],
     kind: str,
@@ -50,17 +76,31 @@ def _add_or_merge(
     created_idx: int,
     atr_val: float,
     merge_gap_thresh: float,
+    max_width: float,
 ) -> None:
     """SPEC.md 4.2: zones of the same kind closer than merge_atr_mult * ATR
     ARE one zone — merge into the existing (earlier) level rather than
     creating a duplicate row. Only active/flipped levels of the same
-    (current) kind are eligible."""
+    (current) kind are eligible.
+
+    max_width caps the merged zone's width (max_zone_width_atr_mult * ATR).
+    Without this cap, a sustained trend keeps producing swings just inside
+    merge_gap_thresh of the existing zone, so price_low/price_high chase
+    price indefinitely and the zone's own break condition (measured against
+    its own, ever-shifting bound) is never satisfied — a live bug found
+    2026-09-24 (level 90288 grew to a 23-point 'support' zone spanning the
+    entire recent range and never invalidated). If the merge would exceed
+    the cap, skip it and fall through to creating an independent zone."""
     for lvl in levels:
         if lvl["kind"] != kind or lvl["status"] not in ("active", "flipped"):
             continue
         if _zone_gap(new_lo, new_hi, lvl["price_low"], lvl["price_high"]) < merge_gap_thresh:
-            lvl["price_low"] = min(lvl["price_low"], new_lo)
-            lvl["price_high"] = max(lvl["price_high"], new_hi)
+            merged_lo = min(lvl["price_low"], new_lo)
+            merged_hi = max(lvl["price_high"], new_hi)
+            if merged_hi - merged_lo > max_width:
+                continue
+            lvl["price_low"] = merged_lo
+            lvl["price_high"] = merged_hi
             return
     levels.append(
         {
@@ -124,6 +164,7 @@ def compute_levels(
     zone_mult = params["zone_width_atr_mult"]
     break_mult = params["break_atr_mult"]
     merge_mult = params["merge_atr_mult"]
+    max_zone_width_mult = params.get("max_zone_width_atr_mult", 2.0)
     lam = params["strength_lambda"]
     expiry_strength = params["strength_expiry_threshold"]
     expiry_dist_mult = params["expiry_distance_atr_mult"]
@@ -220,34 +261,28 @@ def compute_levels(
         if swing_idx < N or math.isnan(atr[swing_idx]):
             continue
 
-        before_hi = highs[swing_idx - N:swing_idx]
-        after_hi  = highs[swing_idx + 1:swing_idx + N + 1]
-        before_lo = lows[swing_idx - N:swing_idx]
-        after_lo  = lows[swing_idx + 1:swing_idx + N + 1]
-
         old_count = len(levels)
 
-        if highs[swing_idx] > before_hi.max() and highs[swing_idx] > after_hi.max():
-            retrace = highs[swing_idx] - after_lo.min()
-            if retrace >= k * atr[swing_idx]:
-                half = zone_mult * atr[swing_idx] / 2
-                _add_or_merge(
-                    levels, "resistance",
-                    highs[swing_idx] - half, highs[swing_idx] + half,
-                    ts[swing_idx], swing_idx, atr[swing_idx],
-                    merge_mult * atr[swing_idx],
-                )
+        is_swing_high, is_swing_low = _confirm_swing(highs, lows, atr, swing_idx, N, k)
+        max_width = max_zone_width_mult * atr[swing_idx]
 
-        if lows[swing_idx] < before_lo.min() and lows[swing_idx] < after_lo.min():
-            retrace = after_hi.max() - lows[swing_idx]
-            if retrace >= k * atr[swing_idx]:
-                half = zone_mult * atr[swing_idx] / 2
-                _add_or_merge(
-                    levels, "support",
-                    lows[swing_idx] - half, lows[swing_idx] + half,
-                    ts[swing_idx], swing_idx, atr[swing_idx],
-                    merge_mult * atr[swing_idx],
-                )
+        if is_swing_high:
+            half = zone_mult * atr[swing_idx] / 2
+            _add_or_merge(
+                levels, "resistance",
+                highs[swing_idx] - half, highs[swing_idx] + half,
+                ts[swing_idx], swing_idx, atr[swing_idx],
+                merge_mult * atr[swing_idx], max_width,
+            )
+
+        if is_swing_low:
+            half = zone_mult * atr[swing_idx] / 2
+            _add_or_merge(
+                levels, "support",
+                lows[swing_idx] - half, lows[swing_idx] + half,
+                ts[swing_idx], swing_idx, atr[swing_idx],
+                merge_mult * atr[swing_idx], max_width,
+            )
 
         # Emit creation events for newly added levels
         if record_history and len(levels) > old_count:
