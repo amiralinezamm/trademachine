@@ -289,3 +289,32 @@ correlation:
   # no number here either; 0.5 (a coin flip) is the lowest bar at which a
   # "does it usually discharge" claim means anything at all.
   pressure_min_success_rate: 0.5
+
+rsi:
+  # Proposed module (not yet in SPEC.md -- see 2026-09-24 task report).
+  # rule id: rsi_overbought_oversold.
+  period: 14
+  overbought: 70
+  oversold: 30
+
+macd:
+  # Proposed module. rule id: macd_price_divergence.
+  fast_period: 12
+  slow_period: 26
+  signal_period: 9
+  # DESIGN DECISION: divergence compared against the MACD LINE, not the
+  # histogram. The line (fast EMA - slow EMA) is the series Appel's original
+  # MACD divergence definition compares to price; the histogram (line -
+  # signal) is a second derivative that crosses zero far more often and is
+  # conventionally used for momentum/crossover timing, not price divergence.
+  # See final report for the full reasoning.
+  divergence_source: "macd_line"  # "macd_line" | "histogram"
+
+divergence:
+  # Shared by compute_price_rsi_divergence() and compute_price_macd_divergence()
+  # (src/features/rsi.py). Deliberately separate from levels.swing_n/swing_k:
+  # those are tuned for support/resistance zone sizing (ATR-retracement
+  # filtered); this is a plain N-bar fractal pivot with no ATR filter, the
+  # standard definition for oscillator divergence. See final report.
+  swing_n: 5            # bars required strictly higher/lower on each side to confirm a pivot
+  lookback_bars: 100     # max bar distance between the two compared swings
