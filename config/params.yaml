@@ -159,6 +159,43 @@ module_voting:
     gaps: 1.0
     patterns: 1.0
     dollar_correlation: 1.0
+    # D20 (2026-09-25) -- proposed-rule voters, gated by
+    # rules_registry.allow_proposed_in_voting below. Same weight as the
+    # existing voters as a neutral starting point; not backtested.
+    matrix: 1.0
+    rsi_overbought_oversold: 1.0
+    rsi_price_divergence: 1.0
+    macd_price_divergence: 1.0
+    regime_quality: 1.0
+    memory_pattern_bias: 1.0
+  # DESIGN DECISION (D20): how many M5 bars a confirmed price/RSI or
+  # price/MACD divergence event stays "active" for voting purposes before
+  # being considered stale. Not specified anywhere -- reusing the rough
+  # scale of level_reversion's own spacing filter rather than inventing an
+  # unrelated number; sweep candidate for the eventual real backtest.
+  divergence_recency_bars: 12
+  # SPEC.md 4.15 (D21) — walk-forward purging/embargo parameters.
+  # M5 + memory module: embargo >= K+H = 48+12 = 60 candles (5 h),
+  # purge >= 5 candles to clear boundary contamination.
+  # All values are sweep candidates; change here, not in code.
+  walk_forward:
+    train_candles: 10080    # 35 days of M5 bars
+    test_candles:  2016     # 7 days of M5 bars
+    embargo_candles: 60     # >= K+H for memory module
+    purge_candles: 5        # boundary contamination buffer
+
+rules_registry:
+  # D20 (2026-09-25, session decision -- explicit user approval in chat,
+  # no live-trading risk while the system doesn't place real orders yet):
+  # when true, rules with status='proposed' in the `rules` table ARE
+  # allowed to cast a weighted vote in module_voting_v1, same as
+  # verified/testing rules -- but every signal whose components include a
+  # still-proposed rule's vote records that rule's id in
+  # components.proposed_observations, so the distinction is never lost
+  # downstream. Setting this back to false immediately reverts to
+  # CLAUDE.md's default (no proposed rule reaches the signal engine) --
+  # no code change needed, just this flag and a restart.
+  allow_proposed_in_voting: true
 
 signal_rules:
   level_reversion:

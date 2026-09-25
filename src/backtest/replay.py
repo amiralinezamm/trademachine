@@ -250,6 +250,47 @@ def _fetch_all_corr(conn, symbol: str, tf: str) -> list[dict]:
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
+def _fetch_all_matrix(conn, symbol: str) -> list[dict]:
+    """D20 -- matrix_snapshots (SPEC.md 4.10). Not tf-scoped (one row per
+    symbol per M5 pivot bar)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT ts_utc, score, direction FROM matrix_snapshots WHERE symbol=%s ORDER BY ts_utc",
+            (symbol,),
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def _fetch_all_rsi_snapshots(conn, symbol: str, tf: str) -> list[dict]:
+    """D20 -- rsi_snapshots (SPEC.md 4.19)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ts_utc, rsi, rsi_state, macd, macd_signal
+            FROM rsi_snapshots WHERE symbol=%s AND tf=%s ORDER BY ts_utc
+            """,
+            (symbol, tf),
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def _fetch_all_divergence_events(conn, symbol: str, tf: str) -> list[dict]:
+    """D20 -- divergence_events (SPEC.md 4.19), both kinds together --
+    build_context()'s _most_recent() separates by 'kind'."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT confirmed_ts, kind, direction
+            FROM divergence_events WHERE symbol=%s AND tf=%s ORDER BY confirmed_ts
+            """,
+            (symbol, tf),
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
 # ---------------------------------------------------------------------------
 # In-memory filtering helpers (all O(log N) per bar via bisect)
 # ---------------------------------------------------------------------------
@@ -343,6 +384,10 @@ def _make_context(
     close: float,
     atr: float,
     as_of_ts: datetime,
+    all_matrix: list[dict] | None = None,
+    all_rsi: list[dict] | None = None,
+    all_divergence: list[dict] | None = None,
+    divergence_recency_bars: int = 12,
 ) -> dict:
     from src.engine.signal_context import build_context
 
@@ -361,6 +406,10 @@ def _make_context(
     corr = _last_row_up_to(all_corr, as_of_ts)
     corr_rows = [corr] if corr else []
 
+    # D20 -- matrix/rsi/divergence rows are already the full pre-fetched
+    # history (like all the lists above); build_context() re-applies the
+    # as_of_ts / recency-window cutoff itself (single source of truth,
+    # shared with the live path -- CLAUDE.md rule 6).
     return build_context(
         regime_snaps=regime_snaps,
         round_hits=round_hits,
@@ -371,6 +420,10 @@ def _make_context(
         close_price=close,
         atr_value=atr,
         as_of_ts=as_of_ts,
+        matrix_snaps=all_matrix or [],
+        rsi_snaps=all_rsi or [],
+        divergence_rows=all_divergence or [],
+        divergence_recency_bars=divergence_recency_bars,
     )
 
 
@@ -481,18 +534,58 @@ def run_backtest(
     symbol: str = "XAUUSD@",
     tf: str = "M5",
     dry_run: bool = False,
+    voter_filter: list[str] | None = None,
+    allow_proposed: bool | None = None,
+    min_net_votes_override: float | None = None,
+    holdout_mode: bool = False,
 ) -> dict[str, Any]:
     """Run the replay backtest and write results to the signals table.
 
     dry_run=True prints stats without writing to DB.
+
+    voter_filter (D20, 2026-09-25 -- per-module isolation for the quick
+    proposed-rule look, step 4/5): when set, ONLY the named module_voting
+    voters (VOTE_FUNCTIONS or PROPOSED_VOTE_FUNCTIONS keys) contribute --
+    every other voter's weight is forced to 0 for this run. None (default)
+    runs the normal full aggregate, unchanged from before.
+
+    allow_proposed: None (default) reads params.yaml's own
+    rules_registry.allow_proposed_in_voting (mirrors whatever the live
+    service is currently configured with); explicit True/False overrides
+    it for this run only -- a backtest is analysis, not the live signal
+    path this flag was written to gate, so overriding it here carries none
+    of the live-risk consideration that flag exists for.
+
+    min_net_votes_override: None (default) uses the configured
+    min_net_votes UNLESS voter_filter narrows to exactly one voter, in
+    which case it's auto-set to 1 -- with only one -1/0/+1 vote
+    contributing, the default threshold of 2 could never pass and the
+    "isolated" run would trivially produce zero signals. Pass an explicit
+    value to override this convenience.
+
     Returns summary dict.
+
+    holdout_mode: when True, skips the HOLDOUT boundary check --
+    only run_holdout_validation() should pass True here.
     """
     from src.engine.level_reversion import apply_spacing_filter, check_level_reversion, load_rule_params
     from src.engine.market_structure import (
         _resample_to_h1, detect_h1_swings, load_structure_params, structure_from_swings,
     )
-    from src.engine.module_voting import compute_votes, load_voting_params
+    from src.engine.module_voting import (
+        compute_votes, load_voting_params, load_rules_registry_params,
+        VOTE_FUNCTIONS, PROPOSED_VOTE_FUNCTIONS,
+    )
     from src.features.levels_store import get_connection
+
+    if not holdout_mode:
+        from src.backtest.splits import HoldoutViolation, get_holdout_start
+        holdout_start = get_holdout_start(symbol=symbol, tf=tf)
+        if to_ts > holdout_start:
+            raise HoldoutViolation(
+                f"to_ts {to_ts} > HOLDOUT boundary {holdout_start}. "
+                "Pass holdout_mode=True only via run_holdout_validation()."
+            )
 
     costs = load_costs()
     bt_cfg = costs.get("backtest", {})
@@ -536,16 +629,52 @@ def run_backtest(
         all_pats    = _fetch_all_patterns(conn, tf, from_ts, to_ts)
         all_gaps    = _fetch_all_gaps(conn, symbol, tf)
         all_corr    = _fetch_all_corr(conn, symbol, tf)
-        log.info("  levels=%d history_keys=%d regime=%d rounds=%d fib=%d pats=%d gaps=%d corr=%d",
+        all_matrix  = _fetch_all_matrix(conn, symbol)
+        all_rsi     = _fetch_all_rsi_snapshots(conn, symbol, tf)
+        all_div     = _fetch_all_divergence_events(conn, symbol, tf)
+        log.info("  levels=%d history_keys=%d regime=%d rounds=%d fib=%d pats=%d gaps=%d corr=%d matrix=%d rsi=%d div=%d",
                  len(all_levels), len(history_by_id), len(all_regime), len(all_rounds),
-                 len(all_fib), len(all_pats), len(all_gaps), len(all_corr))
+                 len(all_fib), len(all_pats), len(all_gaps), len(all_corr),
+                 len(all_matrix), len(all_rsi), len(all_div))
 
         # Sort gap list (already ordered by ts_utc from query, but ensure)
         all_gaps.sort(key=lambda r: r["ts_utc"])
 
         _voting_params = load_voting_params()
+
+        # D20: voter_filter zeroes every OTHER voter's weight for this run;
+        # rule_status + allow_proposed gate the four proposed voters exactly
+        # like the live path (main.py) does.
+        if voter_filter is not None:
+            all_voter_names = set(VOTE_FUNCTIONS) | set(PROPOSED_VOTE_FUNCTIONS)
+            unknown = set(voter_filter) - all_voter_names
+            if unknown:
+                raise ValueError(f"unknown voter_filter name(s): {unknown}")
+            _weights = dict(_voting_params.get("weights", {}))
+            for name in all_voter_names:
+                if name not in voter_filter:
+                    _weights[name] = 0.0
+            _voting_params = {**_voting_params, "weights": _weights}
+            if min_net_votes_override is None and len(voter_filter) == 1:
+                min_net_votes_override = 1
+
+        if min_net_votes_override is not None:
+            _voting_params = {**_voting_params, "min_net_votes": min_net_votes_override}
+
+        _allow_proposed = (
+            allow_proposed if allow_proposed is not None
+            else bool(load_rules_registry_params().get("allow_proposed_in_voting", False))
+        )
+        with conn.cursor() as _cur:
+            _cur.execute(
+                "SELECT id, status FROM rules WHERE id = ANY(%s)",
+                (list(PROPOSED_VOTE_FUNCTIONS.keys()),),
+            )
+            _rule_status = {row[0]: row[1] for row in _cur.fetchall()}
+
         stats = {"total": 0, "signals": 0, "votes_rejected": 0,
-                 "tp": 0, "sl": 0, "level_invalidated": 0, "timeout": 0, "open": 0}
+                 "tp": 0, "sl": 0, "level_invalidated": 0, "timeout": 0, "open": 0,
+                 "total_pnl": 0.0}
         BATCH = 200
         batch_signals = []
 
@@ -598,14 +727,20 @@ def run_backtest(
             ctx = _make_context(
                 all_regime, all_rounds, all_fib, all_pats, all_gaps, all_corr,
                 close, float(atr), ts,
+                all_matrix=all_matrix, all_rsi=all_rsi, all_divergence=all_div,
+                divergence_recency_bars=_voting_params.get("divergence_recency_bars", 12),
             )
             signal["components"].update(ctx)
             signal["components"]["market_structure"] = _structure
 
             # module_voting_v1: aggregate per-module votes; suppress if below threshold.
-            _vote_result = compute_votes(signal["components"], signal["direction"], _voting_params)
+            _vote_result = compute_votes(
+                signal["components"], signal["direction"], _voting_params,
+                rule_status=_rule_status, allow_proposed=_allow_proposed,
+            )
             signal["components"]["votes"] = _vote_result["votes"]
             signal["components"]["net_votes"] = _vote_result["net_votes"]
+            signal["components"]["proposed_observations"] = _vote_result["proposed_observations"]
             if _vote_result["net_votes"] < _voting_params.get("min_net_votes", 2):
                 stats["votes_rejected"] += 1
                 continue
@@ -628,6 +763,7 @@ def run_backtest(
                 max_safety_bars, level_lo, level_hi, break_mult,
             )
             pnl = _pnl(direction, entry, exit_price, cost)
+            stats["total_pnl"] += pnl
 
             signal["entry"] = entry
             _last_by_dir[signal["direction"]] = {"entry": entry, "outcome": outcome}
@@ -653,8 +789,13 @@ def run_backtest(
             stats["level_invalidated"], stats["timeout"], stats["open"],
         )
         if stats["signals"] > 0:
-            winrate = stats["tp"] / stats["signals"]
-            log.info("Raw winrate (tp only): %.1f%%", winrate * 100)
+            stats["winrate"] = stats["tp"] / stats["signals"]
+            stats["expectancy"] = stats["total_pnl"] / stats["signals"]
+            log.info("Raw winrate (tp only): %.1f%%  expectancy=$%.2f/trade",
+                      stats["winrate"] * 100, stats["expectancy"])
+        else:
+            stats["winrate"] = None
+            stats["expectancy"] = None
 
         return stats
     finally:
