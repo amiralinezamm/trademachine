@@ -29,7 +29,7 @@ import bisect
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -123,41 +123,68 @@ def _fetch_all_candles(conn, symbol: str, tf: str,
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
-def _fetch_all_levels(conn, symbol: str, tf: str) -> list[dict]:
+def _fetch_all_levels(conn, symbol: str, tf: str,
+                      max_ts=None) -> list[dict]:
     """All levels sorted by created_ts for bisect filtering (no status filter — historical levels were active when created)."""
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, kind, price_low, price_high, strength, status, created_ts
-            FROM levels
-            WHERE symbol = %s AND tf_origin = %s
-            ORDER BY created_ts
-            """,
-            (symbol, tf),
-        )
+        if max_ts is not None:
+            cur.execute(
+                """
+                SELECT id, kind, price_low, price_high, strength, status, created_ts
+                FROM levels
+                WHERE symbol = %s AND tf_origin = %s AND created_ts <= %s
+                ORDER BY created_ts
+                """,
+                (symbol, tf, max_ts),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, kind, price_low, price_high, strength, status, created_ts
+                FROM levels
+                WHERE symbol = %s AND tf_origin = %s
+                ORDER BY created_ts
+                """,
+                (symbol, tf),
+            )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
 
-def _fetch_all_levels_history(conn, symbol: str, tf: str) -> dict[int, list[dict]]:
+def _fetch_all_levels_history(conn, symbol: str, tf: str,
+                               min_ts=None, max_ts=None) -> dict[int, list[dict]]:
     """Fetch all levels_history rows and group by level_id.
 
     Returns {level_id: [sorted events by ts_utc]} for point-in-time lookup.
     Each event dict has: ts_utc, strength, status, touch_count, break_count.
     """
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT lh.level_id, lh.ts_utc, lh.strength, lh.status,
-                   lh.touch_count, lh.break_count
-            FROM levels_history lh
-            JOIN levels l ON l.id = lh.level_id
-            WHERE l.symbol = %s AND l.tf_origin = %s
-            ORDER BY lh.level_id, lh.ts_utc
-            """,
-            (symbol, tf),
-        )
+        if min_ts is not None and max_ts is not None:
+            cur.execute(
+                """
+                SELECT lh.level_id, lh.ts_utc, lh.strength, lh.status,
+                       lh.touch_count, lh.break_count
+                FROM levels_history lh
+                JOIN levels l ON l.id = lh.level_id
+                WHERE l.symbol = %s AND l.tf_origin = %s
+                  AND lh.ts_utc >= %s AND lh.ts_utc <= %s
+                ORDER BY lh.level_id, lh.ts_utc
+                """,
+                (symbol, tf, min_ts, max_ts),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT lh.level_id, lh.ts_utc, lh.strength, lh.status,
+                       lh.touch_count, lh.break_count
+                FROM levels_history lh
+                JOIN levels l ON l.id = lh.level_id
+                WHERE l.symbol = %s AND l.tf_origin = %s
+                ORDER BY lh.level_id, lh.ts_utc
+                """,
+                (symbol, tf),
+            )
         cols = [d[0] for d in cur.description]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
 
@@ -167,41 +194,77 @@ def _fetch_all_levels_history(conn, symbol: str, tf: str) -> dict[int, list[dict
     return grouped
 
 
-def _fetch_all_regime(conn, symbol: str, tf: str) -> list[dict]:
+def _fetch_all_regime(conn, symbol: str, tf: str,
+                      min_ts=None, max_ts=None) -> list[dict]:
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT ts_utc, regime, adx, bb_width, bb_width_pct
-            FROM regime_snapshots WHERE symbol=%s AND tf_origin=%s ORDER BY ts_utc
-            """,
-            (symbol, tf),
-        )
+        if min_ts is not None and max_ts is not None:
+            cur.execute(
+                """
+                SELECT ts_utc, regime, adx, bb_width, bb_width_pct
+                FROM regime_snapshots
+                WHERE symbol=%s AND tf_origin=%s AND ts_utc >= %s AND ts_utc <= %s
+                ORDER BY ts_utc
+                """,
+                (symbol, tf, min_ts, max_ts),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT ts_utc, regime, adx, bb_width, bb_width_pct
+                FROM regime_snapshots WHERE symbol=%s AND tf_origin=%s ORDER BY ts_utc
+                """,
+                (symbol, tf),
+            )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
-def _fetch_all_round_hits(conn, symbol: str, tf: str) -> list[dict]:
+def _fetch_all_round_hits(conn, symbol: str, tf: str,
+                          min_ts=None, max_ts=None) -> list[dict]:
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT ts_utc, level, multiplier, weight, state, direction
-            FROM round_number_hits WHERE symbol=%s AND tf=%s ORDER BY ts_utc
-            """,
-            (symbol, tf),
-        )
+        if min_ts is not None and max_ts is not None:
+            cur.execute(
+                """
+                SELECT ts_utc, level, multiplier, weight, state, direction
+                FROM round_number_hits
+                WHERE symbol=%s AND tf=%s AND ts_utc >= %s AND ts_utc <= %s
+                ORDER BY ts_utc
+                """,
+                (symbol, tf, min_ts, max_ts),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT ts_utc, level, multiplier, weight, state, direction
+                FROM round_number_hits WHERE symbol=%s AND tf=%s ORDER BY ts_utc
+                """,
+                (symbol, tf),
+            )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
-def _fetch_all_fib_zones(conn, symbol: str, tf: str) -> list[dict]:
+def _fetch_all_fib_zones(conn, symbol: str, tf: str,
+                         max_ts=None) -> list[dict]:
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT computed_at AS ts_utc, price, level_pct, role, overlapping
-            FROM fibonacci_zones WHERE symbol=%s AND tf_origin=%s ORDER BY computed_at
-            """,
-            (symbol, tf),
-        )
+        if max_ts is not None:
+            cur.execute(
+                """
+                SELECT computed_at AS ts_utc, price, level_pct, role, overlapping
+                FROM fibonacci_zones
+                WHERE symbol=%s AND tf_origin=%s AND computed_at <= %s
+                ORDER BY computed_at
+                """,
+                (symbol, tf, max_ts),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT computed_at AS ts_utc, price, level_pct, role, overlapping
+                FROM fibonacci_zones WHERE symbol=%s AND tf_origin=%s ORDER BY computed_at
+                """,
+                (symbol, tf),
+            )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
@@ -223,70 +286,130 @@ def _fetch_all_patterns(conn, tf: str,
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
-def _fetch_all_gaps(conn, symbol: str, tf: str) -> list[dict]:
+def _fetch_all_gaps(conn, symbol: str, tf: str,
+                    min_ts=None, max_ts=None) -> list[dict]:
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT ts_utc, direction, gap_high, gap_low, weight,
-                   status, fill_ts, half_fill_ts, fill_mode
-            FROM gaps WHERE symbol=%s AND tf=%s ORDER BY ts_utc
-            """,
-            (symbol, tf),
-        )
+        if min_ts is not None and max_ts is not None:
+            cur.execute(
+                """
+                SELECT ts_utc, direction, gap_high, gap_low, weight,
+                       status, fill_ts, half_fill_ts, fill_mode
+                FROM gaps
+                WHERE symbol=%s AND tf=%s AND ts_utc >= %s AND ts_utc <= %s
+                ORDER BY ts_utc
+                """,
+                (symbol, tf, min_ts, max_ts),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT ts_utc, direction, gap_high, gap_low, weight,
+                       status, fill_ts, half_fill_ts, fill_mode
+                FROM gaps WHERE symbol=%s AND tf=%s ORDER BY ts_utc
+                """,
+                (symbol, tf),
+            )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
-def _fetch_all_corr(conn, symbol: str, tf: str) -> list[dict]:
+def _fetch_all_corr(conn, symbol: str, tf: str,
+                    min_ts=None, max_ts=None) -> list[dict]:
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT ts_utc, correlation FROM dollar_correlation
-            WHERE symbol=%s AND tf=%s ORDER BY ts_utc
-            """,
-            (symbol, tf),
-        )
+        if min_ts is not None and max_ts is not None:
+            cur.execute(
+                """
+                SELECT ts_utc, correlation FROM dollar_correlation
+                WHERE symbol=%s AND tf=%s AND ts_utc >= %s AND ts_utc <= %s
+                ORDER BY ts_utc
+                """,
+                (symbol, tf, min_ts, max_ts),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT ts_utc, correlation FROM dollar_correlation
+                WHERE symbol=%s AND tf=%s ORDER BY ts_utc
+                """,
+                (symbol, tf),
+            )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
-def _fetch_all_matrix(conn, symbol: str) -> list[dict]:
+def _fetch_all_matrix(conn, symbol: str,
+                      min_ts=None, max_ts=None) -> list[dict]:
     """D20 -- matrix_snapshots (SPEC.md 4.10). Not tf-scoped (one row per
     symbol per M5 pivot bar)."""
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT ts_utc, score, direction FROM matrix_snapshots WHERE symbol=%s ORDER BY ts_utc",
-            (symbol,),
-        )
+        if min_ts is not None and max_ts is not None:
+            cur.execute(
+                """
+                SELECT ts_utc, score, direction FROM matrix_snapshots
+                WHERE symbol=%s AND ts_utc >= %s AND ts_utc <= %s
+                ORDER BY ts_utc
+                """,
+                (symbol, min_ts, max_ts),
+            )
+        else:
+            cur.execute(
+                "SELECT ts_utc, score, direction FROM matrix_snapshots WHERE symbol=%s ORDER BY ts_utc",
+                (symbol,),
+            )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
-def _fetch_all_rsi_snapshots(conn, symbol: str, tf: str) -> list[dict]:
+def _fetch_all_rsi_snapshots(conn, symbol: str, tf: str,
+                             min_ts=None, max_ts=None) -> list[dict]:
     """D20 -- rsi_snapshots (SPEC.md 4.19)."""
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT ts_utc, rsi, rsi_state, macd, macd_signal
-            FROM rsi_snapshots WHERE symbol=%s AND tf=%s ORDER BY ts_utc
-            """,
-            (symbol, tf),
-        )
+        if min_ts is not None and max_ts is not None:
+            cur.execute(
+                """
+                SELECT ts_utc, rsi, rsi_state, macd, macd_signal
+                FROM rsi_snapshots
+                WHERE symbol=%s AND tf=%s AND ts_utc >= %s AND ts_utc <= %s
+                ORDER BY ts_utc
+                """,
+                (symbol, tf, min_ts, max_ts),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT ts_utc, rsi, rsi_state, macd, macd_signal
+                FROM rsi_snapshots WHERE symbol=%s AND tf=%s ORDER BY ts_utc
+                """,
+                (symbol, tf),
+            )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
-def _fetch_all_divergence_events(conn, symbol: str, tf: str) -> list[dict]:
+def _fetch_all_divergence_events(conn, symbol: str, tf: str,
+                                 min_ts=None, max_ts=None) -> list[dict]:
     """D20 -- divergence_events (SPEC.md 4.19), both kinds together --
     build_context()'s _most_recent() separates by 'kind'."""
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT confirmed_ts, kind, direction
-            FROM divergence_events WHERE symbol=%s AND tf=%s ORDER BY confirmed_ts
-            """,
-            (symbol, tf),
-        )
+        if min_ts is not None and max_ts is not None:
+            cur.execute(
+                """
+                SELECT confirmed_ts, kind, direction
+                FROM divergence_events
+                WHERE symbol=%s AND tf=%s
+                  AND confirmed_ts >= %s AND confirmed_ts <= %s
+                ORDER BY confirmed_ts
+                """,
+                (symbol, tf, min_ts, max_ts),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT confirmed_ts, kind, direction
+                FROM divergence_events WHERE symbol=%s AND tf=%s ORDER BY confirmed_ts
+                """,
+                (symbol, tf),
+            )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
@@ -295,25 +418,43 @@ def _fetch_all_divergence_events(conn, symbol: str, tf: str) -> list[dict]:
 # In-memory filtering helpers (all O(log N) per bar via bisect)
 # ---------------------------------------------------------------------------
 
+class _PreIndexed(list):
+    """list subclass that pre-builds timestamp keys once for O(1) per-bar bisect.
+
+    Eliminates O(N) key-list construction on every _rows_up_to() call.
+    Compatible with all list operations; downstream code sees a plain list.
+    """
+    def __init__(self, rows: list[dict], key_field: str = "ts_utc") -> None:
+        super().__init__(rows)
+        self._ts_keys = [r[key_field] for r in rows]
+
+
 def _ts_key(row: dict) -> datetime:
     return row["ts_utc"]
 
 
-def _rows_up_to(sorted_rows: list[dict], as_of_ts: datetime) -> list[dict]:
+def _rows_up_to(sorted_rows, as_of_ts: datetime) -> list[dict]:
     """All rows with ts_utc <= as_of_ts (sorted_rows must be sorted by ts_utc)."""
-    keys = [r["ts_utc"] for r in sorted_rows]
+    keys = getattr(sorted_rows, "_ts_keys", None)
+    if keys is None:
+        keys = [r["ts_utc"] for r in sorted_rows]
     idx = bisect.bisect_right(keys, as_of_ts)
     return sorted_rows[:idx]
 
 
-def _last_row_up_to(sorted_rows: list[dict], as_of_ts: datetime) -> dict | None:
-    rows = _rows_up_to(sorted_rows, as_of_ts)
-    return rows[-1] if rows else None
+def _last_row_up_to(sorted_rows, as_of_ts: datetime) -> dict | None:
+    keys = getattr(sorted_rows, "_ts_keys", None)
+    if keys is None:
+        keys = [r[ts_utc] for r in sorted_rows]
+    idx = bisect.bisect_right(keys, as_of_ts)
+    return sorted_rows[idx - 1] if idx > 0 else None
 
 
-def _levels_at(all_levels: list[dict], as_of_ts: datetime) -> list[dict]:
+def _levels_at(all_levels, as_of_ts: datetime) -> list[dict]:
     """Levels created at or before as_of_ts (anti-lookahead on created_ts)."""
-    keys = [r["created_ts"] for r in all_levels]
+    keys = getattr(all_levels, "_ts_keys", None)
+    if keys is None:
+        keys = [r["created_ts"] for r in all_levels]
     idx = bisect.bisect_right(keys, as_of_ts)
     return all_levels[:idx]
 
@@ -340,7 +481,9 @@ def _level_state_at(
     entries = history_by_id.get(level_id)
     if not entries:
         return 0.0, "active", 0, 0
-    ts_list = [e["ts_utc"] for e in entries]
+    ts_list = getattr(entries, "_ts_keys", None)
+    if ts_list is None:
+        ts_list = [e["ts_utc"] for e in entries]
     idx = bisect.bisect_right(ts_list, as_of_ts) - 1
     if idx < 0:
         return 0.0, "active", 0, 0
@@ -621,17 +764,25 @@ def run_backtest(
         log.info("  %d H1 bars, %d confirmed swings", len(_h1_candles), len(_h1_swings))
 
         log.info("Pre-fetching module outputs…")
-        all_levels = _fetch_all_levels(conn, symbol, tf)
-        history_by_id = _fetch_all_levels_history(conn, symbol, tf)
-        all_regime  = _fetch_all_regime(conn, symbol, tf)
-        all_rounds  = _fetch_all_round_hits(conn, symbol, tf)
-        all_fib     = _fetch_all_fib_zones(conn, symbol, tf)
-        all_pats    = _fetch_all_patterns(conn, tf, from_ts, to_ts)
-        all_gaps    = _fetch_all_gaps(conn, symbol, tf)
-        all_corr    = _fetch_all_corr(conn, symbol, tf)
-        all_matrix  = _fetch_all_matrix(conn, symbol)
-        all_rsi     = _fetch_all_rsi_snapshots(conn, symbol, tf)
-        all_div     = _fetch_all_divergence_events(conn, symbol, tf)
+        _fetch_min = from_ts - timedelta(days=30)
+        # Pre-convert Decimal columns to float once to avoid 19M float() calls per fold
+        _raw_levels = _fetch_all_levels(conn, symbol, tf, max_ts=to_ts)
+        for _lv in _raw_levels:
+            _lv["price_low"]  = float(_lv["price_low"])
+            _lv["price_high"] = float(_lv["price_high"])
+            _lv["strength"]   = float(_lv["strength"])
+        all_levels = _PreIndexed(_raw_levels, "created_ts")
+        _raw_hist  = _fetch_all_levels_history(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts)
+        history_by_id = {lid: _PreIndexed(rows) for lid, rows in _raw_hist.items()}
+        all_regime  = _PreIndexed(_fetch_all_regime(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts))
+        all_rounds  = _PreIndexed(_fetch_all_round_hits(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts))
+        all_fib     = _PreIndexed(_fetch_all_fib_zones(conn, symbol, tf, max_ts=to_ts))
+        all_pats    = _PreIndexed(_fetch_all_patterns(conn, tf, from_ts, to_ts))
+        all_gaps    = _PreIndexed(_fetch_all_gaps(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts))
+        all_corr    = _PreIndexed(_fetch_all_corr(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts))
+        all_matrix  = _PreIndexed(_fetch_all_matrix(conn, symbol, min_ts=_fetch_min, max_ts=to_ts))
+        all_rsi     = _PreIndexed(_fetch_all_rsi_snapshots(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts))
+        all_div     = _PreIndexed(_fetch_all_divergence_events(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts), "confirmed_ts")
         log.info("  levels=%d history_keys=%d regime=%d rounds=%d fib=%d pats=%d gaps=%d corr=%d matrix=%d rsi=%d div=%d",
                  len(all_levels), len(history_by_id), len(all_regime), len(all_rounds),
                  len(all_fib), len(all_pats), len(all_gaps), len(all_corr),
@@ -697,8 +848,19 @@ def run_backtest(
             # Apply point-in-time strength/status from levels_history.
             # Levels with no history entry yet (freshly created, no touches)
             # default to (0.0, "active") — filter to active/flipped only.
+            # Price pre-filter: skip levels >3×ATR from current bar's range
+            # (check_level_reversion requires wick to touch zone; levels this
+            # far away are guaranteed misses — avoids 9.7M _level_state_at
+            # calls for irrelevant levels in walk-forward folds).
+            _atr_f = float(atr) if float(atr) > 0 else 1.0
+            _price_lo = low  - 3.0 * _atr_f
+            _price_hi = high + 3.0 * _atr_f
             pit_levels = []
             for lvl in levels_now:
+                if lvl["price_high"] < _price_lo:
+                    continue
+                if lvl["price_low"] > _price_hi:
+                    continue
                 s, status, tc, bc = _level_state_at(history_by_id, lvl["id"], ts)
                 if status not in ("active", "flipped"):
                     continue

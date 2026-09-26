@@ -1602,6 +1602,42 @@ def _run_walk_forward_sync(payload: WalkForwardRequest) -> dict:
         }
         for fr in result.folds
     ]
+    # Persist run to walk_forward_runs table
+    try:
+        import json as _json
+        from src.features.levels_store import get_connection as _get_conn
+        _conn = _get_conn()
+        try:
+            with _conn, _conn.cursor() as _cur:
+                _cur.execute(
+                    """
+                    INSERT INTO walk_forward_runs
+                        (from_ts, to_ts, symbol, tf, config,
+                         n_folds, n_signals, mean_expectancy,
+                         std_expectancy, mean_winrate, fold_results)
+                    VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s::jsonb)
+                    """,
+                    (
+                        payload.from_ts, payload.to_ts,
+                        payload.symbol, payload.tf,
+                        _json.dumps({
+                            "train_candles": payload.train_candles,
+                            "test_candles": payload.test_candles,
+                            "embargo_candles": payload.embargo_candles,
+                            "purge_candles": payload.purge_candles,
+                        }),
+                        len(result.folds), result.n_signals,
+                        result.mean_expectancy, result.std_expectancy,
+                        result.mean_winrate,
+                        _json.dumps(folds_out),
+                    ),
+                )
+        finally:
+            _conn.close()
+    except Exception as _exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("walk_forward_runs persist failed: %s", _exc)
+
     return {
         "n_folds": len(result.folds),
         "n_signals_total": result.n_signals,

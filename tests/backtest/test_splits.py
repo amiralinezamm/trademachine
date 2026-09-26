@@ -87,7 +87,7 @@ def test_holdout_start_stable_after_first_compute():
     mock_cur = MagicMock()
     mock_conn.cursor.return_value = _make_cursor_ctx(mock_cur)
     # Cache hit: first fetchone returns a stored value
-    mock_cur.fetchone.return_value = (f'"{fixed_ts.isoformat()}"',)
+    mock_cur.fetchone.return_value = (fixed_ts.isoformat(),)
 
     from src.backtest.splits import get_holdout_start
     result = get_holdout_start(_conn=mock_conn)
