@@ -21,7 +21,9 @@ from src.features.levels import compute_levels, load_levels_params
 from src.features.levels_store import fetch_candles, get_connection, upsert_levels
 from src.ingest.candles_store import TF_MINUTES, filter_closed_candles
 from src.engine.market_structure import compute_market_structure
-from src.engine.module_voting import compute_votes, load_voting_params
+from src.engine.module_voting import (
+    compute_votes, load_voting_params, load_rules_registry_params, PROPOSED_VOTE_FUNCTIONS,
+)
 from src.news.blackout import compute_blackout, get_blackout_status
 
 load_dotenv()
@@ -295,6 +297,15 @@ async def compute_levels_endpoint(
 
 
 
+def _fetch_rule_statuses_sync(conn, rule_ids: list[str]) -> dict[str, str]:
+    """D20 (2026-09-25): current `rules` table status for the given ids --
+    used to gate module_voting_v1's PROPOSED_VOTE_FUNCTIONS. Reads only;
+    never writes rules.status (that's a human/backtest decision)."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, status FROM rules WHERE id = ANY(%s)", (rule_ids,))
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+
 def _fetch_news_events_sync(conn, as_of_ts: datetime) -> list[dict]:
     """Sync psycopg2 mirror of blackout.fetch_relevant_events — for use in
     _check_signal_sync which cannot use async/asyncpg."""
@@ -368,20 +379,32 @@ def _check_signal_sync(symbol: str, tf: str) -> dict:
         # (SPEC.md 4.14 — components jsonb must include all signal contributors).
         # fetch_db_context() is pure-logic separated: build_context() inside it
         # re-applies as_of_ts filter on every list so no future data can leak in.
+        _voting_params = load_voting_params()
         from src.engine.signal_context import fetch_db_context
         ctx = fetch_db_context(
             conn, symbol, tf, candle["ts_utc"],
             float(candle["close"]), atr,
+            divergence_recency_bars=_voting_params.get("divergence_recency_bars", 12),
         )
         signal["components"].update(ctx)
         signal["components"]["market_structure"] = _structure["structure"]
 
         # module_voting_v1: aggregate per-module votes; suppress signal if
         # net_votes is below the configured threshold.
-        _voting_params = load_voting_params()
-        _vote_result = compute_votes(signal["components"], signal["direction"], _voting_params)
+        # D20 (2026-09-25): proposed-status rules (matrix, rsi_overbought_oversold,
+        # rsi_price_divergence, macd_price_divergence) only vote when
+        # rules_registry.allow_proposed_in_voting is true; whichever of them
+        # did vote this call is recorded in components.proposed_observations
+        # so a proposed rule's influence on a live signal is never silent.
+        _rule_status = _fetch_rule_statuses_sync(conn, list(PROPOSED_VOTE_FUNCTIONS.keys()))
+        _allow_proposed = bool(load_rules_registry_params().get("allow_proposed_in_voting", False))
+        _vote_result = compute_votes(
+            signal["components"], signal["direction"], _voting_params,
+            rule_status=_rule_status, allow_proposed=_allow_proposed,
+        )
         signal["components"]["votes"] = _vote_result["votes"]
         signal["components"]["net_votes"] = _vote_result["net_votes"]
+        signal["components"]["proposed_observations"] = _vote_result["proposed_observations"]
         if _vote_result["net_votes"] < _voting_params.get("min_net_votes", 2):
             return {
                 "signal": None, "as_of": candle["ts_utc"].isoformat(),
@@ -1525,3 +1548,130 @@ async def get_rollover_alerts(acknowledged: bool | None = Query(None)):
         return {"alerts": rows}
     finally:
         conn.close()
+
+# ─── Walk-forward & holdout endpoints (SPEC.md 4.15) ─────────────────────────
+
+class WalkForwardRequest(BaseModel):
+    from_ts: datetime
+    to_ts: datetime
+    train_candles: int = 10080
+    test_candles: int = 2016
+    embargo_candles: int = 60
+    purge_candles: int = 5
+    symbol: str = "XAUUSD@"
+    tf: str = "M5"
+    voter_filter: list[str] | None = None
+
+
+class HoldoutValidateRequest(BaseModel):
+    rule_id: str
+    symbol: str = "XAUUSD@"
+    tf: str = "M5"
+    voter_filter: list[str] | None = None
+
+
+def _run_walk_forward_sync(payload: WalkForwardRequest) -> dict:
+    from src.backtest.walk_forward import WFConfig, run_walk_forward
+
+    config = WFConfig(
+        train_candles=payload.train_candles,
+        test_candles=payload.test_candles,
+        embargo_candles=payload.embargo_candles,
+        purge_candles=payload.purge_candles,
+        tf=payload.tf,
+    )
+    result = run_walk_forward(
+        from_ts=payload.from_ts,
+        to_ts=payload.to_ts,
+        config=config,
+        symbol=payload.symbol,
+        dry_run=True,
+        voter_filter=payload.voter_filter,
+    )
+    folds_out = [
+        {
+            "fold": fr.split.fold,
+            "train_start": fr.split.train_start.isoformat(),
+            "train_end": fr.split.train_end.isoformat(),
+            "test_start": fr.split.test_start.isoformat(),
+            "test_end": fr.split.test_end.isoformat(),
+            "signals": fr.oos.get("signals", 0),
+            "winrate": fr.oos.get("winrate"),
+            "expectancy": fr.oos.get("expectancy"),
+            "pnl": fr.oos.get("pnl"),
+        }
+        for fr in result.folds
+    ]
+    return {
+        "n_folds": len(result.folds),
+        "n_signals_total": result.n_signals,
+        "mean_expectancy": result.mean_expectancy,
+        "std_expectancy": result.std_expectancy,
+        "mean_winrate": result.mean_winrate,
+        "folds": folds_out,
+    }
+
+
+@app.post("/backtest/walk-forward")
+async def backtest_walk_forward(payload: WalkForwardRequest):
+    """SPEC.md 4.15 — Walk-forward OOS evaluation with purging/embargo.
+
+    Always runs dry_run=True (no writes to signals table).
+    to_ts must not exceed HOLDOUT boundary (2026-02-18T07:05:00Z);
+    requests into HOLDOUT return 400.
+
+    Example request:
+        POST /backtest/walk-forward
+        {"from_ts": "2025-01-01T00:00:00Z", "to_ts": "2026-01-01T00:00:00Z"}
+
+    Example response:
+        {"n_folds": 18, "n_signals_total": 47, "mean_expectancy": 4.2,
+         "std_expectancy": 3.1, "mean_winrate": 0.55, "folds": [...]}
+    """
+    from src.backtest.splits import HoldoutViolation
+
+    try:
+        return await run_in_threadpool(_run_walk_forward_sync, payload)
+    except HoldoutViolation as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _run_holdout_validate_sync(payload: HoldoutValidateRequest) -> dict:
+    from src.backtest.walk_forward import HoldoutAlreadyTested, run_holdout_validation
+
+    result = run_holdout_validation(
+        rule_id=payload.rule_id,
+        symbol=payload.symbol,
+        tf=payload.tf,
+        voter_filter=payload.voter_filter,
+    )
+    return {
+        "rule_id": payload.rule_id,
+        "signals": result.get("signals", 0),
+        "winrate": result.get("winrate"),
+        "expectancy": result.get("expectancy"),
+        "pnl": result.get("pnl"),
+    }
+
+
+@app.post("/backtest/holdout-validate")
+async def backtest_holdout_validate(payload: HoldoutValidateRequest):
+    """SPEC.md 4.15 — One-shot HOLDOUT evaluation for a candidate rule.
+
+    Each rule_id may be evaluated exactly once.  Calling again returns HTTP 409.
+    Runs dry_run=True (no writes to signals table).
+
+    Example request:
+        POST /backtest/holdout-validate
+        {"rule_id": "rsi_overbought_oversold"}
+
+    Example responses:
+        200: {"rule_id": "rsi_overbought_oversold", "signals": 12, "winrate": 0.58, ...}
+        409: {"detail": "rule_id 'rsi_overbought_oversold' has already been tested on HOLDOUT..."}
+    """
+    from src.backtest.walk_forward import HoldoutAlreadyTested
+
+    try:
+        return await run_in_threadpool(_run_holdout_validate_sync, payload)
+    except HoldoutAlreadyTested as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
