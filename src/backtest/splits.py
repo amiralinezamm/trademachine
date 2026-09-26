@@ -7,7 +7,6 @@ never recompute from live candle data — so new candles never move the boundary
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Iterator
@@ -60,7 +59,8 @@ def get_holdout_start(
             row = cur.fetchone()
             if row is not None:
                 raw = row[0]
-                val = json.loads(raw) if isinstance(raw, str) else raw
+                # psycopg2 deserializes jsonb to Python object directly; no json.loads needed
+                val = raw if isinstance(raw, str) else str(raw)
                 return datetime.fromisoformat(str(val))
 
             # First call: compute 80th-percentile candle timestamp and persist.

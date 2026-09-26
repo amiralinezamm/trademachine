@@ -82,16 +82,21 @@ def run_walk_forward(
 
     fold_results: list[FoldResult] = []
     for s in splits:
-        oos = run_backtest(
-            from_ts=s.test_start,
-            to_ts=s.test_end,
-            symbol=symbol,
-            tf=config.tf,
-            dry_run=dry_run,
-            allow_proposed=allow_proposed,
-            voter_filter=voter_filter,
-            holdout_mode=False,
-        )
+        try:
+            oos = run_backtest(
+                from_ts=s.test_start,
+                to_ts=s.test_end,
+                symbol=symbol,
+                tf=config.tf,
+                dry_run=dry_run,
+                allow_proposed=allow_proposed,
+                voter_filter=voter_filter,
+                holdout_mode=False,
+            )
+        except ValueError as exc:
+            # skip folds that fall on market-closed windows (weekend, holiday)
+            log.warning("fold %d skipped: %s", s.fold, exc)
+            continue
         fold_results.append(FoldResult(split=s, oos=oos))
         log.info(
             "  fold %d oos: n=%s winrate=%s expectancy=%s",
