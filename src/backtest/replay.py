@@ -891,6 +891,8 @@ def run_backtest(
                 close, float(atr), ts,
                 all_matrix=all_matrix, all_rsi=all_rsi, all_divergence=all_div,
                 divergence_recency_bars=_voting_params.get("divergence_recency_bars", 12),
+                all_dxy=all_dxy,
+                dxy_direction_bars=_dxy_dir_bars,
             )
             signal["components"].update(ctx)
             signal["components"]["market_structure"] = _structure

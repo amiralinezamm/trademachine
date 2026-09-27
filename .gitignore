@@ -41,3 +41,18 @@ data/
 .idea/
 .vscode/
 *.swp
+
+# Added per initial-commit requirements
+*.env
+**/secrets.yaml
+**/secrets.yml
+*.db
+*.dump
+*.sql.gz
+pgdata/
+panel/dist/
+panel/node_modules/
+*.pt
+*.pth
+*.ckpt
+*.bak

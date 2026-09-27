@@ -166,6 +166,7 @@ module_voting:
     rsi_overbought_oversold: 1.0
     rsi_price_divergence: 1.0
     macd_price_divergence: 1.0
+    dollar_correlation_direction: 1.0
     regime_quality: 1.0
     memory_pattern_bias: 1.0
   # DESIGN DECISION (D20): how many M5 bars a confirmed price/RSI or
@@ -287,6 +288,8 @@ correlation:
 
   # 4.8-a: rolling dollar correlation. SPEC.md explicit.
   dollar_corr_window: 200
+  dxy_direction_bars: 3        # bars of DXY M5 history to compare for direction
+  dollar_corr_min_abs: 0.3     # |dollar_corr| threshold below which vote is 0
 
   # 4.8-b: oil shock.
   oil_shock_return_bars: 3       # SPEC.md explicit

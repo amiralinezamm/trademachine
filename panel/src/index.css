@@ -1,0 +1,172 @@
+@import "tailwindcss";
+
+/* ── Darvish Condensed font-face declarations ────────────────────────────── */
+@font-face {
+  font-family: 'Darvish';
+  src: url('/fonts/Darvish-Condensed-Light.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Darvish';
+  src: url('/fonts/Darvish-Condensed-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Darvish';
+  src: url('/fonts/Darvish-Condensed-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Darvish';
+  src: url('/fonts/Darvish-Condensed-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Darvish';
+  src: url('/fonts/Darvish-Condensed-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Darvish';
+  src: url('/fonts/Darvish-Condensed-ExtraBold.woff2') format('woff2');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Darvish';
+  src: url('/fonts/Darvish-Condensed-Black.woff2') format('woff2');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Darvish';
+  src: url('/fonts/Darvish-Condensed-Heavy.woff2') format('woff2');
+  font-weight: 950;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Darvish';
+  src: url('/fonts/Darvish-Condensed-ExtraBlack.woff2') format('woff2');
+  font-weight: 960;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Darvish';
+  src: url('/fonts/Darvish-Condensed-SuperHeavy.woff2') format('woff2');
+  font-weight: 970;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── Tailwind v4 theme ───────────────────────────────────────────────────── */
+@theme {
+  --font-family-darvish: 'Darvish', system-ui, sans-serif;
+  --font-family-geist:   'Darvish', system-ui, sans-serif;
+
+  --color-background:          hsl(222 14% 10%);
+  --color-foreground:          hsl(220 13% 85%);
+  --color-card:                hsl(222 14% 15%);
+  --color-border:              hsl(220 12% 20%);
+  --color-muted:               hsl(222 12% 18%);
+  --color-muted-foreground:    hsl(220 9% 53%);
+  --color-primary:             hsl(224 100% 57%);
+  --color-primary-foreground:  hsl(0 0% 100%);
+  --color-secondary:           hsl(222 14% 18%);
+  --color-secondary-foreground: hsl(220 13% 85%);
+
+  --animate-element:      fadeUp 0.5s ease both;
+  --animate-testimonial:  fadeUp 0.6s ease both;
+  --animate-slide-right:  slideRight 0.7s ease both;
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes slideRight {
+    from { opacity: 0; transform: translateX(-24px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+}
+
+/* ── CSS variables (runtime) ─────────────────────────────────────────────── */
+:root {
+  --background:           222 14% 10%;
+  --foreground:           220 13% 85%;
+  --card:                 222 14% 15%;
+  --border:               220 12% 20%;
+  --muted:                222 12% 18%;
+  --muted-foreground:     220 9%  53%;
+  --primary:              224 100% 57%;
+  --primary-foreground:   0   0%  100%;
+  --secondary:            222 14% 18%;
+  --secondary-foreground: 220 13% 85%;
+}
+
+/* ── Global font application ─────────────────────────────────────────────── */
+html, body, #root, * {
+  font-family: 'Darvish', system-ui, sans-serif;
+}
+
+/* ── Animation delays ────────────────────────────────────────────────────── */
+.animate-delay-100  { animation-delay: 0.10s; }
+.animate-delay-200  { animation-delay: 0.20s; }
+.animate-delay-300  { animation-delay: 0.30s; }
+.animate-delay-400  { animation-delay: 0.40s; }
+.animate-delay-500  { animation-delay: 0.50s; }
+.animate-delay-600  { animation-delay: 0.60s; }
+.animate-delay-700  { animation-delay: 0.70s; }
+.animate-delay-800  { animation-delay: 0.80s; }
+.animate-delay-900  { animation-delay: 0.90s; }
+.animate-delay-1000 { animation-delay: 1.00s; }
+.animate-delay-1200 { animation-delay: 1.20s; }
+.animate-delay-1400 { animation-delay: 1.40s; }
+
+.animate-element,
+.animate-testimonial,
+.animate-slide-right {
+  animation-fill-mode: both;
+}
+
+/* ── Custom checkbox ─────────────────────────────────────────────────────── */
+.custom-checkbox {
+  appearance: none;
+  width: 1rem;
+  height: 1rem;
+  border: 1.5px solid hsl(220 12% 20%);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+.custom-checkbox:checked {
+  background: hsl(224 100% 57%);
+  border-color: hsl(224 100% 57%);
+}
+.custom-checkbox:checked::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0px;
+  width: 5px;
+  height: 9px;
+  border: 2px solid white;
+  border-top: none;
+  border-left: none;
+  transform: rotate(45deg);
+}

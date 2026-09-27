@@ -1,0 +1,86 @@
+{
+  "updatedAt": "2026-09-14T17:13:41.740Z",
+  "createdAt": "2026-09-14T17:13:35.768Z",
+  "id": "r6mYdh1owJ7cbCJ0",
+  "name": "My workflow",
+  "description": null,
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -208,
+        0
+      ],
+      "id": "8fa2057c-fba4-4b21-b62d-8c6cc6e73d00",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Loop over input items and add a new field called 'myNewField' to the JSON of each one\nfor (const item of $input.all()) {\n  item.json.myNewField = 1;\n}\n\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        16,
+        0
+      ],
+      "id": "31d68b77-b79a-46ae-9c0c-29f4d76f4a96",
+      "name": "Code in JavaScript"
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "cdb982d5-7492-4965-8916-fd9b041e005a",
+  "activeVersionId": null,
+  "versionCounter": 2,
+  "triggerCount": 0,
+  "sourceWorkflowId": null,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2026-09-14T17:13:35.768Z",
+      "createdAt": "2026-09-14T17:13:35.768Z",
+      "role": "workflow:owner",
+      "workflowId": "r6mYdh1owJ7cbCJ0",
+      "projectId": "hevZsVZX8R10Ii7V",
+      "project": {
+        "updatedAt": "2026-09-12T22:25:10.464Z",
+        "createdAt": "2026-09-12T21:14:11.758Z",
+        "id": "hevZsVZX8R10Ii7V",
+        "name": "amirali nez <amirali.nezam313@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "334c54ce-d19c-4ee5-91f9-4949252899e3"
+      }
+    }
+  ],
+  "versionMetadata": {
+    "name": null,
+    "description": null
+  }
+}

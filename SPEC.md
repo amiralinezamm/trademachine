@@ -39,7 +39,8 @@
 | D16 | ابزارهای همبسته | دلار، نفت، اوراق قرضه با همان جدول candles بک‌فیل می‌شوند؛ ورودی مشترک همه ماژول‌ها. نام دقیق نماد WM Markets هنوز تایید نشده |
 | D17 | تقویت‌کننده برخورد مکرر | برخورد مکرر واجد شرایط روی یک ناحیه (دابل تاپ/باتم) ضریب `confidence` می‌شود، نه منبع سیگنال مستقل — بخش ۴.۲ |
 | D18 | اندیکاتور Matrix | Matrix Arrow Indicator MTF — موتور رأی‌گیری ۱۰اندیکاتوری در ۷ تایم‌فریم؛ خروجی `matrix_score` ورودی `fusion` است، نه سیگنال مستقل؛ مرجع: MQL5 product/75011 |
-| D19 | RSI + واگرایی RSI/MACD | ماژول مستقل `rsi_macd_divergence` — RSI(14) پایه، واگرایی کلاسیک قیمت/RSI روی سوئینگ فرکتال مستقل (نه `_confirm_swing` سطوح)، واگرایی قیمت/MACD روی خط MACD (نه هیستوگرام). جداول ایزوله بدون FK به `levels`/`signals`. فعلاً `proposed` در رجیستری قوانین، تا تایید آماری به `module_voting_v1`/`check_level_reversion` وصل نمی‌شود — بخش ۴.۱۹ |
+| D19 | RSI + واگرایی RSI/MACD | ماژول مستقل `rsi_macd_divergence` — RSI(14) پایه، واگرایی کلاسیک قیمت/RSI روی سوئینگ فرکتال مستقل (نه `_confirm_swing` سطوح)، واگرایی قیمت/MACD روی خط MACD (نه هیستوگرام). جداول ایزوله بدون FK به `levels`/`signals`. ثبت‌شده `proposed` در رجیستری قوانین — از مسیر پرچم D20 به `module_voting_v1` وصل است — بخش ۴.۱۹ |
+| D20 | اتصال ماژول‌های proposed به module_voting_v1 | شش قانون `proposed` (matrix_score_mtf_agreement، rsi_overbought_oversold، rsi_price_divergence، macd_price_divergence، regime_quality، memory_pattern_bias) از مسیر پرچم `rules_registry.allow_proposed_in_voting` (پیش‌فرض `true`) به `module_voting_v1` وصل شدند. هر سیگنال حاوی فیلد `proposed_observations` است که نشان می‌دهد کدام رأی‌دهنده‌های proposed در آن سیگنال رأی دادند. برگشت به وضع قبل: فقط پرچم را `false` کن + restart. محافظ `VOTER_IMPLEMENTATION_COMPLETE` در کد جلوگیری می‌کند stub/placeholder به رأی‌گیری برسد. `dollar_correlation` به‌عمد از `VOTE_FUNCTIONS` حذف شد (stub — DXY direction نیاز دارد) — بخش ۴.۱۶ |
 
 ---
 

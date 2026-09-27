@@ -106,3 +106,29 @@ def insert_signal(conn, signal: dict[str, Any]) -> int | None:
     except psycopg2.errors.UniqueViolation:
         conn.rollback()
         return None
+
+
+def fetch_last_signal_for_direction(
+    conn, direction: str, as_of_ts
+) -> "dict[str, Any] | None":
+    """Return the most recent signal with `direction` whose ts_utc <= as_of_ts.
+
+    Used by the same-direction spacing filter (Rule: same_direction_spacing_filter).
+    Returns a dict with keys 'entry' (float) and 'outcome' (str | None), or None
+    if no prior signal of that direction exists at as_of_ts.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT entry, outcome
+            FROM signals
+            WHERE direction = %s AND ts_utc <= %s
+            ORDER BY ts_utc DESC
+            LIMIT 1
+            """,
+            (direction, as_of_ts),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return {"entry": float(row[0]), "outcome": row[1]}

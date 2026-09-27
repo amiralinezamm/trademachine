@@ -5,7 +5,7 @@ from src.engine.module_voting import compute_votes
 
 PARAMS = {"min_net_votes": 2, "weights": {
     "structure": 1.0, "round_numbers": 1.0, "fibonacci": 1.0,
-    "gaps": 1.0, "patterns": 1.0, "dollar_correlation": 1.0,
+    "gaps": 1.0, "patterns": 1.0,
 }}
 
 
@@ -94,10 +94,12 @@ def test_pattern_mixed_neutral():
     assert r["votes"]["patterns"] == 0
 
 
-def test_dollar_correlation_always_zero():
-    c = {"dollar_corr": -0.8}
-    r = compute_votes(c, "BUY", PARAMS)
-    assert r["votes"]["dollar_correlation"] == 0
+def test_dollar_correlation_not_in_votes():
+    # dollar_correlation is a stub (always returns 0, no real DXY direction data).
+    # It was removed from VOTE_FUNCTIONS so it no longer appears in votes dict --
+    # a zero-always voter just pollutes the output without contributing signal.
+    r = compute_votes({"dollar_corr": -0.8}, "BUY", PARAMS)
+    assert "dollar_correlation" not in r["votes"]
 
 
 def test_net_votes_sums_weighted():
