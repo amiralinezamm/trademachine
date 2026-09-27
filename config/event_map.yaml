@@ -1,71 +1,1110 @@
-# Event → gold direction map (SPEC.md 4.7-b table).
-# gold_sign: -1 means "actual above forecast → gold expected DOWN" (strong data).
-#            +1 means the inverse (Unemployment Rate, Initial Jobless Claims —
-#            a higher number there means economic weakness).
+# Event -> gold direction map (SPEC.md 4.7-b table).
+# Rebuilt 2026-09-27 from the user's own researched impact table
+# (xauusd_news_impact.json, asOf 2026-09-27) — gold_sign is no longer a
+# project guess, it is what the user supplied ('dir': up/down per event).
 #
-# Matching is exact, case-insensitive, against `aliases` (see src/news/surprise.py).
-# The ForexFactory feed does not always use the textbook name for an indicator,
-# so each entry lists the wordings we've actually seen or expect. Aliases marked
-# "(verified in live feed 2026-09-12)" were confirmed against the real feed;
-# the rest are standard ForexFactory wording but UNVERIFIED because that event
-# type did not fire during our test week — per project rule, if a real event's
-# title doesn't match any alias here, stop and ask rather than guessing a new one.
+# gold_sign: -1 means "actual above forecast -> gold expected DOWN".
+#            +1 means the inverse.
+#
+# IMPORTANT — this is why `country` exists on every entry and lookup_gold_sign()
+# takes a country argument now: the SAME title (e.g. "CPI y/y", "GDP m/m",
+# "Retail Sales m/m") means the OPPOSITE gold_sign depending on currency.
+# A USD indicator moves gold through the Fed/DXY channel (strong USD data ->
+# stronger dollar -> gold down); a EUR/GBP indicator moves gold through the
+# inverse-DXY channel (strong EUR/GBP data -> weaker dollar -> gold up). Matching
+# by title alone would silently pick whichever entry happened to load last.
+#
+# tier (1-5), usd_range, pct_range: expected |move| in the first ~15-60min after
+# release, from the user's table (meta.tiers below explains the tier bands).
+# Not yet consumed by any code — stored for the intensity_estimator/backtest
+# work later, so this research doesn't have to be redone.
+#
+# Matching is exact (title + country), case-insensitive, against `aliases`.
+# If a real event's (title, country) doesn't match any alias here, don't guess
+# a new mapping — same project rule as before.
+
+meta:
+  as_of: "2026-09-27"
+  gold_spot_at_capture: 4285
+  atr_pct_at_capture: 1.9
+  atr_usd_at_capture: 81
+  regime_at_capture: "انقباضی-تورمی"
+  tiers:
+    - t: 1
+      fa: "خیلی کم"
+      usd: "زیر ۵ دلار"
+      pct: "زیر ۰.۱۲٪"
+    - t: 2
+      fa: "کم"
+      usd: "زیر ۱۰ دلار"
+      pct: "زیر ۰.۲۳٪"
+    - t: 3
+      fa: "متوسط"
+      usd: "زیر ۲۰ دلار"
+      pct: "زیر ۰.۴۷٪"
+    - t: 4
+      fa: "زیاد"
+      usd: "زیر ۵۰ دلار"
+      pct: "زیر ۱.۱۶٪"
+    - t: 5
+      fa: "خیلی زیاد"
+      usd: "بالای ۵۰ دلار"
+      pct: "بالای ۱.۱۶٪"
 
 events:
-  - canonical: "Non-Farm Payrolls"
+  - country: "USD"
+    canonical: "Non-Farm Employment Change (NFP)"
+    fa: "تغییر اشتغال غیرکشاورزی"
     gold_sign: -1
+    ff_impact: "High"
+    tier: 5
+    usd_range: "40 – 110 $"
+    pct_range: "0.9 – 2.5 %"
+    bundle: "NFP"
+    schedule: "اولین جمعه هر ماه · 12:30 GMT"
+    why: "اشتغال قوی‌تر = فِد سخت‌گیرتر = دلار و بازدهی بالاتر = فشار روی طلای بدون‌بازدهی. ۴ سپتامبر ۲۰۲۶ یک سورپرایز مثبت NFP حدود ۱۰۰ دلار طلا را پایین برد."
+    flip: "اگر عدد آنقدر قوی باشد که ترس رکود/بحران ایجاد کند یا همزمان تجدیدنظر ماه قبل شدیداً منفی باشد، جهت می‌تواند در ۱۵ دقیقه دوم برگردد."
     aliases:
-      - "Non-Farm Employment Change"   # unverified — standard FF wording for NFP
-      - "Non-Farm Payrolls"
+      - "Non-Farm Employment Change"
+      - "Non-Farm Employment Change (NFP)"
 
-  - canonical: "CPI / Core CPI"
-    gold_sign: -1
-    aliases:
-      - "CPI m/m"              # verified in live feed 2026-09-12
-      - "CPI y/y"               # verified in live feed 2026-09-12
-      - "Core CPI m/m"          # verified in live feed 2026-09-12
-      - "Core CPI y/y"          # verified in live feed 2026-09-12
-
-  - canonical: "PCE / Core PCE"
-    gold_sign: -1
-    aliases:
-      - "PCE Price Index m/m"          # unverified
-      - "Core PCE Price Index m/m"     # unverified
-      - "Core PCE Price Index y/y"     # unverified
-
-  - canonical: "GDP"
-    gold_sign: -1
-    aliases:
-      - "GDP m/m"                # verified in live feed 2026-09-12 (UK monthly GDP)
-      - "GDP q/q"                # unverified
-      - "Advance GDP q/q"        # unverified
-      - "Prelim GDP q/q"         # unverified
-      - "Final GDP q/q"          # unverified
-
-  - canonical: "Retail Sales"
-    gold_sign: -1
-    aliases:
-      - "Retail Sales m/m"        # unverified
-      - "Core Retail Sales m/m"   # unverified
-
-  - canonical: "ISM Manufacturing / Services PMI"
-    gold_sign: -1
-    aliases:
-      - "ISM Manufacturing PMI"   # unverified
-      - "ISM Services PMI"        # unverified
-
-  - canonical: "Fed Funds Rate"
-    gold_sign: -1
-    aliases:
-      - "Federal Funds Rate"   # unverified
-
-  - canonical: "Unemployment Rate"
+  - country: "USD"
+    canonical: "Unemployment Rate"
+    fa: "نرخ بیکاری"
     gold_sign: 1
+    ff_impact: "High"
+    tier: 5
+    usd_range: "30 – 80 $"
+    pct_range: "0.7 – 1.9 %"
+    bundle: "NFP"
+    schedule: "همزمان با NFP · 12:30 GMT"
+    why: "معکوس‌کد است: بیکاری بالاتر = بازار کار ضعیف‌تر = انتظار سیاست ملایم‌تر = طلا بالا. در باندل NFP منتشر می‌شود و گاهی بر خود NFP غلبه می‌کند."
     aliases:
-      - "Unemployment Rate"   # unverified this week (didn't fire), but exact SPEC wording
+      - "Unemployment Rate"
 
-  - canonical: "Initial Jobless Claims"
-    gold_sign: 1
+  - country: "USD"
+    canonical: "Average Hourly Earnings m/m"
+    fa: "میانگین درآمد ساعتی"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 4
+    usd_range: "15 – 45 $"
+    pct_range: "0.35 – 1.0 %"
+    bundle: "NFP"
+    schedule: "همزمان با NFP · 12:30 GMT"
+    why: "کانال دستمزد→تورم. در رژیم تورمی فعلی این جزء وزن بالایی دارد و می‌تواند جهت کل باندل NFP را تعیین کند."
     aliases:
-      - "Unemployment Claims"    # verified in live feed 2026-09-12 — FF's actual title for this SPEC entry
-      - "Initial Jobless Claims"
+      - "Average Hourly Earnings m/m"
+
+  - country: "USD"
+    canonical: "CPI m/m"
+    fa: "شاخص قیمت مصرف‌کننده ماهانه"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 5
+    usd_range: "40 – 95 $"
+    pct_range: "0.9 – 2.2 %"
+    bundle: "CPI"
+    schedule: "حدود روز ۱۰–۱۵ ماه · 12:30 GMT"
+    why: "تورم داغ‌تر = احتمال افزایش نرخ فِد بیشتر = دلار و بازدهی واقعی بالاتر = طلا پایین."
+    flip: "مهم: اگر افزایش نرخ از قبل کاملاً قیمت‌گذاری شده باشد، طلا می‌تواند برعکس واکنش دهد. در ۱۱ سپتامبر ۲۰۲۶ با Core CPI داغ‌تر از انتظار، طلا اول تا زیر ۴,۳۰۰ ریخت و سپس حدود ۲٪ تا ۴,۳۹۴ بالا رفت."
+    aliases:
+      - "CPI m/m"
+
+  - country: "USD"
+    canonical: "CPI y/y"
+    fa: "تورم سالانه CPI"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 5
+    usd_range: "35 – 85 $"
+    pct_range: "0.8 – 2.0 %"
+    bundle: "CPI"
+    schedule: "همزمان با CPI · 12:30 GMT"
+    why: "سرخط سالانه؛ بیشترین حساسیت الگوریتم‌ها در ثانیه‌های اول روی همین عدد و Core است."
+    aliases:
+      - "CPI y/y"
+
+  - country: "USD"
+    canonical: "Core CPI m/m"
+    fa: "تورم هسته ماهانه"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 5
+    usd_range: "40 – 95 $"
+    pct_range: "0.9 – 2.2 %"
+    bundle: "CPI"
+    schedule: "همزمان با CPI · 12:30 GMT"
+    why: "عددی که فِد بیشترین وزن را به آن می‌دهد. انحراف ۰.۱٪ از Forecast کافی است تا کل جهت روز عوض شود."
+    aliases:
+      - "Core CPI m/m"
+
+  - country: "USD"
+    canonical: "Federal Funds Rate"
+    fa: "نرخ بهره فِد"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 5
+    usd_range: "45 – 120 $"
+    pct_range: "1.0 – 2.8 %"
+    bundle: "FOMC"
+    schedule: "۸ بار در سال · 18:00 GMT"
+    why: "بالاتر از انتظار = انقباض = طلا پایین. سپتامبر ۲۰۲۶ فِد به ۳.۷۵–۴.۰۰٪ افزایش داد، اولین افزایش بعد از بیش از سه سال."
+    flip: "چون این جلسه تقریباً همیشه از پیش قیمت‌گذاری شده، «لحن بیانیه» معمولاً بیشتر از خود عدد حرکت می‌سازد."
+    aliases:
+      - "Federal Funds Rate"
+
+  - country: "USD"
+    canonical: "Core PCE Price Index m/m"
+    fa: "شاخص قیمت PCE هسته"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 4
+    usd_range: "18 – 45 $"
+    pct_range: "0.4 – 1.05 %"
+    bundle: "PCE"
+    schedule: "آخرین جمعه ماه · 12:30 GMT"
+    why: "معیار رسمی تورم فِد. چون معمولاً بعد از CPI و PPI منتشر می‌شود، بخشی از آن قابل پیش‌بینی است و واکنش کمتر از CPI است."
+    aliases:
+      - "Core PCE Price Index m/m"
+
+  - country: "USD"
+    canonical: "Advance GDP q/q"
+    fa: "تولید ناخالص داخلی (برآورد اول)"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 4
+    usd_range: "10 – 28 $"
+    pct_range: "0.25 – 0.65 %"
+    schedule: "فصلی، اواخر ماه · 12:30 GMT"
+    why: "رشد قوی‌تر = فضای بیشتر برای انقباض = طلا پایین. فقط برآورد Advance مهم است؛ Prelim و Final تقریباً بی‌اثرند."
+    aliases:
+      - "Advance GDP q/q"
+
+  - country: "USD"
+    canonical: "Core Retail Sales m/m"
+    fa: "خرده‌فروشی هسته"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 4
+    usd_range: "15 – 38 $"
+    pct_range: "0.35 – 0.9 %"
+    bundle: "RETAIL"
+    schedule: "حدود روز ۱۵ ماه · 12:30 GMT"
+    why: "نبض مصرف آمریکا. اغلب همزمان با Retail Sales منتشر می‌شود؛ اگر دو عدد هم‌جهت نباشند، واکنش نصف می‌شود."
+    aliases:
+      - "Core Retail Sales m/m"
+
+  - country: "USD"
+    canonical: "Retail Sales m/m"
+    fa: "خرده‌فروشی کل"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 4
+    usd_range: "15 – 38 $"
+    pct_range: "0.35 – 0.9 %"
+    bundle: "RETAIL"
+    schedule: "حدود روز ۱۵ ماه · 12:30 GMT"
+    why: "سرخط مصرف؛ در رژیم فعلی که فِد نگران «قدرت تقاضای داخلی» است، وزن این داده بالا رفته."
+    aliases:
+      - "Retail Sales m/m"
+
+  - country: "USD"
+    canonical: "ISM Services PMI"
+    fa: "PMI خدمات ISM"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 4
+    usd_range: "15 – 40 $"
+    pct_range: "0.35 – 0.95 %"
+    schedule: "روز کاری سوم ماه · 15:00 GMT"
+    why: "خدمات حدود ۷۰٪ اقتصاد آمریکاست. بالای ۵۰ = رونق. زیربخش Prices Paid آن گاهی بیشتر از سرخط طلا را تکان می‌دهد."
+    aliases:
+      - "ISM Services PMI"
+
+  - country: "USD"
+    canonical: "ISM Manufacturing PMI"
+    fa: "PMI تولیدی ISM"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 4
+    usd_range: "12 – 30 $"
+    pct_range: "0.28 – 0.7 %"
+    schedule: "اولین روز کاری ماه · 15:00 GMT"
+    why: "قدیمی‌ترین نبض صنعت آمریکا؛ کمتر از ISM خدمات وزن دارد ولی چون اولین داده ماه است، لحن هفته را می‌سازد."
+    aliases:
+      - "ISM Manufacturing PMI"
+
+  - country: "USD"
+    canonical: "PPI m/m"
+    fa: "شاخص قیمت تولیدکننده"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 4
+    usd_range: "15 – 40 $"
+    pct_range: "0.35 – 0.95 %"
+    bundle: "PPI"
+    schedule: "حدود روز ۱۳–۱۵ ماه · 12:30 GMT"
+    why: "تورم بالادست، پیش‌نگر CPI. در سپتامبر ۲۰۲۶ یک PPI داغ به‌تنهایی دلار را جهش داد و طلا را زیر فشار سنگین گذاشت."
+    flip: "در رژیم تورمی فعلی این رویداد گاهی به سطح «خیلی زیاد» می‌رسد؛ در رژیم آرام به «متوسط» برمی‌گردد."
+    aliases:
+      - "PPI m/m"
+
+  - country: "USD"
+    canonical: "Core PPI m/m"
+    fa: "PPI هسته"
+    gold_sign: -1
+    ff_impact: "High"
+    tier: 4
+    usd_range: "12 – 32 $"
+    pct_range: "0.28 – 0.75 %"
+    bundle: "PPI"
+    schedule: "همزمان با PPI · 12:30 GMT"
+    why: "نسخه بدون انرژی و غذا؛ وقتی نفت در حال جهش است، Core معتبرتر از سرخط خوانده می‌شود."
+    aliases:
+      - "Core PPI m/m"
+
+  - country: "USD"
+    canonical: "ADP Non-Farm Employment Change"
+    fa: "اشتغال بخش خصوصی ADP"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 3
+    usd_range: "8 – 22 $"
+    pct_range: "0.2 – 0.5 %"
+    schedule: "چهارشنبه قبل از NFP · 12:15 GMT"
+    why: "پیش‌درآمد NFP. همبستگی‌اش با NFP ضعیف است، برای همین بازار آن را با احتیاط می‌خواند؛ ولی در هفته NFP اثرش دو برابر می‌شود."
+    aliases:
+      - "ADP Non-Farm Employment Change"
+
+  - country: "USD"
+    canonical: "Unemployment Claims"
+    fa: "مدعیان بیمه بیکاری"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 3
+    usd_range: "5 – 15 $"
+    pct_range: "0.12 – 0.35 %"
+    schedule: "هر پنجشنبه · 12:30 GMT"
+    why: "معکوس‌کد: مدعیان بیشتر = بازار کار ضعیف‌تر = طلا بالا. تنها داده هفتگی مهم؛ در رژیمی که بازار روی اشتغال حساس است تا «متوسط» بالا می‌رود."
+    aliases:
+      - "Unemployment Claims"
+
+  - country: "USD"
+    canonical: "JOLTS Job Openings"
+    fa: "فرصت‌های شغلی JOLTS"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 3
+    usd_range: "6 – 18 $"
+    pct_range: "0.15 – 0.42 %"
+    schedule: "حدود روز ۳۰ ماه · 15:00 GMT"
+    why: "تقاضای کار. داده‌اش با دو ماه تأخیر است و همین وزنش را پایین می‌آورد."
+    aliases:
+      - "JOLTS Job Openings"
+
+  - country: "USD"
+    canonical: "Prelim UoM Consumer Sentiment"
+    fa: "اعتماد مصرف‌کننده میشیگان (اولیه)"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 3
+    usd_range: "8 – 22 $"
+    pct_range: "0.2 – 0.5 %"
+    bundle: "UOM"
+    schedule: "جمعه دوم ماه · 15:00 GMT"
+    why: "همزمان با آن «انتظارات تورمی ۱ ساله و ۵ ساله» منتشر می‌شود؛ برای طلا معمولاً آن دو عدد از خود Sentiment مهم‌ترند."
+    aliases:
+      - "Prelim UoM Consumer Sentiment"
+
+  - country: "USD"
+    canonical: "Prelim UoM Inflation Expectations"
+    fa: "انتظارات تورمی میشیگان"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 3
+    usd_range: "8 – 20 $"
+    pct_range: "0.2 – 0.47 %"
+    bundle: "UOM"
+    schedule: "همزمان با UoM · 15:00 GMT"
+    why: "اگر انتظارات تورمی «لنگر» خود را از دست بدهد، فِد مجبور به انقباض شدیدتر می‌شود — کانال منفی برای طلا."
+    flip: "در سناریوی رکود تورمی (انتظارات تورمی بالا + داده رشد ضعیف) علامت برعکس می‌شود و طلا بالا می‌رود."
+    aliases:
+      - "Prelim UoM Inflation Expectations"
+
+  - country: "USD"
+    canonical: "Flash Manufacturing PMI (S&P Global)"
+    fa: "PMI تولیدی فلش"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 3
+    usd_range: "8 – 20 $"
+    pct_range: "0.2 – 0.47 %"
+    bundle: "USPMI"
+    schedule: "حدود روز ۲۳ ماه · 13:45 GMT"
+    why: "زودترین عکس ماه جاری. ۲۴ سپتامبر ۲۰۲۶ همین داده با «سریع‌ترین رشد فعالیت در بیش از ۵ سال» دلار را به اوج دوماهه برد و طلا را پایین کشید."
+    aliases:
+      - "Flash Manufacturing PMI"
+      - "Flash Manufacturing PMI (S&P Global)"
+
+  - country: "USD"
+    canonical: "Flash Services PMI (S&P Global)"
+    fa: "PMI خدمات فلش"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 3
+    usd_range: "8 – 20 $"
+    pct_range: "0.2 – 0.47 %"
+    bundle: "USPMI"
+    schedule: "همزمان · 13:45 GMT"
+    why: "معمولاً با نسخه تولیدی یک‌جا خوانده می‌شود؛ ربات باید این دو را یک باندل واحد ببیند، نه دو سیگنال جدا."
+    aliases:
+      - "Flash Services PMI"
+      - "Flash Services PMI (S&P Global)"
+
+  - country: "USD"
+    canonical: "Employment Cost Index q/q"
+    fa: "شاخص هزینه اشتغال"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 3
+    usd_range: "8 – 20 $"
+    pct_range: "0.2 – 0.47 %"
+    schedule: "فصلی · 12:30 GMT"
+    why: "دقیق‌ترین معیار فشار دستمزد در آمریکا؛ فقط فصلی است ولی فِد صریحاً به آن ارجاع می‌دهد."
+    aliases:
+      - "Employment Cost Index q/q"
+
+  - country: "USD"
+    canonical: "CB Consumer Confidence"
+    fa: "اعتماد مصرف‌کننده کنفرانس‌بورد"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "4 – 12 $"
+    pct_range: "0.1 – 0.28 %"
+    schedule: "آخرین سه‌شنبه ماه · 15:00 GMT"
+    why: "زیربخش «Labor Differential» آن پیش‌نگر نرخ بیکاری است و گاهی بیش از سرخط اهمیت دارد."
+    aliases:
+      - "CB Consumer Confidence"
+
+  - country: "USD"
+    canonical: "Core Durable Goods Orders m/m"
+    fa: "سفارش کالاهای بادوام هسته"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "4 – 11 $"
+    pct_range: "0.1 – 0.26 %"
+    bundle: "DG"
+    schedule: "حدود روز ۲۶ ماه · 12:30 GMT"
+    why: "نماینده سرمایه‌گذاری بنگاه‌ها؛ بسیار پرنوسان و همین قابلیت سیگنال‌دهی‌اش را کم می‌کند."
+    aliases:
+      - "Core Durable Goods Orders m/m"
+
+  - country: "USD"
+    canonical: "Durable Goods Orders m/m"
+    fa: "سفارش کالاهای بادوام"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 10 $"
+    pct_range: "0.07 – 0.23 %"
+    bundle: "DG"
+    schedule: "همزمان · 12:30 GMT"
+    why: "سرخط با سفارش هواپیما تحریف می‌شود؛ بازار معمولاً نسخه Core را می‌خواند."
+    aliases:
+      - "Durable Goods Orders m/m"
+
+  - country: "USD"
+    canonical: "Philly Fed Manufacturing Index"
+    fa: "شاخص تولیدی فیلادلفیا"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 9 $"
+    pct_range: "0.07 – 0.21 %"
+    schedule: "پنجشنبه سوم ماه · 12:30 GMT"
+    why: "نظرسنجی منطقه‌ای؛ فقط وقتی مهم می‌شود که با Empire State هم‌جهت و شدید باشد."
+    aliases:
+      - "Philly Fed Manufacturing Index"
+
+  - country: "USD"
+    canonical: "Empire State Manufacturing Index"
+    fa: "شاخص تولیدی نیویورک"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 8 $"
+    pct_range: "0.07 – 0.19 %"
+    schedule: "حدود روز ۱۵ ماه · 12:30 GMT"
+    why: "اولین نظرسنجی منطقه‌ای ماه؛ اثرش روی طلا معمولاً در حد نویز است."
+    aliases:
+      - "Empire State Manufacturing Index"
+
+  - country: "USD"
+    canonical: "Personal Spending m/m"
+    fa: "مخارج شخصی"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 9 $"
+    pct_range: "0.07 – 0.21 %"
+    bundle: "PCE"
+    schedule: "همزمان با Core PCE · 12:30 GMT"
+    why: "چون در همان دقیقه Core PCE منتشر می‌شود، عملاً تحت‌الشعاع آن قرار می‌گیرد."
+    aliases:
+      - "Personal Spending m/m"
+
+  - country: "USD"
+    canonical: "Personal Income m/m"
+    fa: "درآمد شخصی"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "2 – 6 $"
+    pct_range: "0.05 – 0.14 %"
+    bundle: "PCE"
+    schedule: "همزمان با Core PCE · 12:30 GMT"
+    why: "به‌ندرت به‌تنهایی حرکت می‌سازد."
+    aliases:
+      - "Personal Income m/m"
+
+  - country: "USD"
+    canonical: "Chicago PMI"
+    fa: "PMI شیکاگو"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 8 $"
+    pct_range: "0.07 – 0.19 %"
+    schedule: "آخرین روز کاری ماه · 14:45 GMT"
+    why: "پیش‌نگر ISM تولیدی روز بعد؛ گاهی واکنش را «پیش‌خور» می‌کند."
+    aliases:
+      - "Chicago PMI"
+
+  - country: "USD"
+    canonical: "Prelim GDP q/q"
+    fa: "تجدیدنظر دوم GDP"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 9 $"
+    pct_range: "0.07 – 0.21 %"
+    schedule: "فصلی · 12:30 GMT"
+    why: "تجدیدنظر است نه داده نو؛ فقط وقتی بازنگری بزرگ باشد حرکت می‌سازد."
+    aliases:
+      - "Prelim GDP q/q"
+
+  - country: "USD"
+    canonical: "Building Permits"
+    fa: "مجوزهای ساخت"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "2 – 7 $"
+    pct_range: "0.05 – 0.16 %"
+    bundle: "HOUSE"
+    schedule: "حدود روز ۱۷ ماه · 12:30 GMT"
+    why: "پیش‌نگرترین داده مسکن؛ از Housing Starts مهم‌تر است."
+    aliases:
+      - "Building Permits"
+
+  - country: "USD"
+    canonical: "Housing Starts"
+    fa: "آغاز ساخت مسکن"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "2 – 6 $"
+    pct_range: "0.05 – 0.14 %"
+    bundle: "HOUSE"
+    schedule: "همزمان · 12:30 GMT"
+    why: "پرنوسان و اغلب تجدیدنظرشونده."
+    aliases:
+      - "Housing Starts"
+
+  - country: "USD"
+    canonical: "New Home Sales"
+    fa: "فروش خانه‌های نو"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "2 – 6 $"
+    pct_range: "0.05 – 0.14 %"
+    schedule: "حدود روز ۲۵ ماه · 14:00 GMT"
+    why: "حساس به نرخ رهن؛ در دوره نرخ‌های بالا بازار آن را بیشتر می‌بیند."
+    aliases:
+      - "New Home Sales"
+
+  - country: "USD"
+    canonical: "Existing Home Sales"
+    fa: "فروش خانه‌های موجود"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "2 – 6 $"
+    pct_range: "0.05 – 0.14 %"
+    schedule: "حدود روز ۲۰ ماه · 14:00 GMT"
+    why: "بزرگ‌ترین بخش بازار مسکن ولی داده‌اش با تأخیر قرارداد است."
+    aliases:
+      - "Existing Home Sales"
+
+  - country: "USD"
+    canonical: "Pending Home Sales m/m"
+    fa: "فروش در انتظار مسکن"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "2 – 5 $"
+    pct_range: "0.05 – 0.12 %"
+    schedule: "حدود روز ۲۸ ماه · 14:00 GMT"
+    why: "اثر روی طلا تقریباً همیشه در حد نویز."
+    aliases:
+      - "Pending Home Sales m/m"
+
+  - country: "USD"
+    canonical: "Trade Balance"
+    fa: "تراز تجاری"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "2 – 6 $"
+    pct_range: "0.05 – 0.14 %"
+    schedule: "حدود روز ۵ ماه · 12:30 GMT"
+    why: "عدد منفی است؛ «بالاتر» یعنی کسری کمتر یعنی دلار قوی‌تر یعنی طلا پایین. اثر مستقیم بسیار کم."
+    aliases:
+      - "Trade Balance"
+
+  - country: "USD"
+    canonical: "Industrial Production m/m"
+    fa: "تولید صنعتی"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "2 – 6 $"
+    pct_range: "0.05 – 0.14 %"
+    schedule: "حدود روز ۱۶ ماه · 13:15 GMT"
+    why: "سهم صنعت از GDP آمریکا کم است؛ کمتر از نسخه اروپایی‌اش اهمیت دارد."
+    aliases:
+      - "Industrial Production m/m"
+
+  - country: "USD"
+    canonical: "Factory Orders m/m"
+    fa: "سفارش کارخانه"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "1 – 5 $"
+    pct_range: "0.02 – 0.12 %"
+    schedule: "حدود روز ۴ ماه · 15:00 GMT"
+    why: "بخش اعظمش از Durable Goods هفته قبل معلوم شده."
+    aliases:
+      - "Factory Orders m/m"
+
+  - country: "USD"
+    canonical: "Final GDP q/q"
+    fa: "GDP نهایی"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "1 – 4 $"
+    pct_range: "0.02 – 0.09 %"
+    schedule: "فصلی · 12:30 GMT"
+    why: "سومین و آخرین بازنگری؛ عملاً بی‌اثر."
+    aliases:
+      - "Final GDP q/q"
+
+  - country: "USD"
+    canonical: "Revised UoM Consumer Sentiment"
+    fa: "اعتماد میشیگان (نهایی)"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "1 – 5 $"
+    pct_range: "0.02 – 0.12 %"
+    schedule: "جمعه آخر ماه · 15:00 GMT"
+    why: "فقط وقتی مهم است که انتظارات تورمی در بازنگری تغییر کند."
+    aliases:
+      - "Revised UoM Consumer Sentiment"
+
+  - country: "EUR"
+    canonical: "Main Refinancing Rate"
+    fa: "نرخ بهره ECB"
+    gold_sign: 1
+    ff_impact: "High"
+    tier: 4
+    usd_range: "10 – 28 $"
+    pct_range: "0.25 – 0.65 %"
+    bundle: "ECB"
+    schedule: "۸ بار در سال · 12:15 GMT"
+    why: "نرخ بالاتر = یورو قوی‌تر = شاخص دلار پایین‌تر = طلا بالا. توجه: علامت برعکس رویدادهای دلاری است."
+    flip: "اگر افزایش نرخ ECB به‌عنوان «انقباض جهانی» خوانده شود، کانال بازدهی واقعی می‌تواند علامت را معکوس کند و طلا پایین برود."
+    aliases:
+      - "Main Refinancing Rate"
+
+  - country: "EUR"
+    canonical: "ECB Monetary Policy Statement"
+    fa: "بیانیه سیاست پولی ECB"
+    gold_sign: 1
+    ff_impact: "High"
+    tier: 4
+    usd_range: "10 – 25 $"
+    pct_range: "0.25 – 0.58 %"
+    bundle: "ECB"
+    schedule: "همزمان · 12:15 GMT"
+    why: "لحن بیانیه معمولاً بیشتر از خود نرخ که پیش‌خور شده، حرکت می‌سازد."
+    aliases:
+      - "ECB Monetary Policy Statement"
+
+  - country: "EUR"
+    canonical: "CPI Flash Estimate y/y"
+    fa: "برآورد فلش تورم منطقه یورو"
+    gold_sign: 1
+    ff_impact: "High"
+    tier: 3
+    usd_range: "6 – 16 $"
+    pct_range: "0.14 – 0.37 %"
+    bundle: "EZCPI"
+    schedule: "اولین روزهای ماه · 10:00 GMT"
+    why: "تورم بالاتر = ECB سخت‌گیرتر = یورو بالا = طلا بالا (غیرمستقیم، از کانال DXY)."
+    aliases:
+      - "CPI Flash Estimate y/y"
+
+  - country: "EUR"
+    canonical: "Core CPI Flash Estimate y/y"
+    fa: "تورم هسته فلش منطقه یورو"
+    gold_sign: 1
+    ff_impact: "High"
+    tier: 3
+    usd_range: "6 – 16 $"
+    pct_range: "0.14 – 0.37 %"
+    bundle: "EZCPI"
+    schedule: "همزمان · 10:00 GMT"
+    why: "معتبرتر از سرخط چون اثر انرژی را حذف می‌کند."
+    aliases:
+      - "Core CPI Flash Estimate y/y"
+
+  - country: "EUR"
+    canonical: "German Prelim CPI m/m"
+    fa: "تورم اولیه آلمان"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 9 $"
+    pct_range: "0.07 – 0.21 %"
+    schedule: "چند روز قبل از CPI منطقه یورو · 12:00 GMT"
+    why: "بزرگ‌ترین وزن در سبد منطقه یورو؛ بازار از آن عدد فلش اروپا را پیش‌بینی می‌کند."
+    aliases:
+      - "German Prelim CPI m/m"
+
+  - country: "EUR"
+    canonical: "German Flash Manufacturing PMI"
+    fa: "PMI تولیدی فلش آلمان"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 9 $"
+    pct_range: "0.07 – 0.21 %"
+    bundle: "EUPMI"
+    schedule: "حدود روز ۲۳ ماه · 08:30 GMT"
+    why: "موتور صنعتی اروپا؛ حساس‌ترین جزء در روز PMI اروپا."
+    aliases:
+      - "German Flash Manufacturing PMI"
+
+  - country: "EUR"
+    canonical: "German Flash Services PMI"
+    fa: "PMI خدمات فلش آلمان"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 8 $"
+    pct_range: "0.07 – 0.19 %"
+    bundle: "EUPMI"
+    schedule: "همزمان · 08:30 GMT"
+    why: "همراه با نسخه تولیدی یک باندل واحد است."
+    aliases:
+      - "German Flash Services PMI"
+
+  - country: "EUR"
+    canonical: "French Flash Services/Manufacturing PMI"
+    fa: "PMI فلش فرانسه"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "1 – 4 $"
+    pct_range: "0.02 – 0.09 %"
+    bundle: "EUPMI"
+    schedule: "۱۵ دقیقه قبل از آلمان · 08:15 GMT"
+    why: "زودتر منتشر می‌شود و گاهی جهت داده آلمان را لو می‌دهد؛ اثر مستقیمش روی طلا ناچیز."
+    aliases:
+      - "French Flash Services/Manufacturing PMI"
+
+  - country: "EUR"
+    canonical: "Eurozone Flash PMIs"
+    fa: "PMI فلش منطقه یورو"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 8 $"
+    pct_range: "0.07 – 0.19 %"
+    bundle: "EUPMI"
+    schedule: "بعد از آلمان · 09:00 GMT"
+    why: "جمع‌بندی؛ اگر با داده آلمان هم‌جهت نباشد، واکنش خنثی می‌شود."
+    aliases:
+      - "Eurozone Flash PMIs"
+
+  - country: "EUR"
+    canonical: "German ZEW Economic Sentiment"
+    fa: "احساسات اقتصادی ZEW آلمان"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "2 – 7 $"
+    pct_range: "0.05 – 0.16 %"
+    schedule: "سه‌شنبه دوم ماه · 10:00 GMT"
+    why: "نظرسنجی از تحلیلگران، نه داده واقعی؛ پرنوسان است."
+    aliases:
+      - "German ZEW Economic Sentiment"
+
+  - country: "EUR"
+    canonical: "German Ifo Business Climate"
+    fa: "شاخص فضای کسب‌وکار Ifo"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "2 – 7 $"
+    pct_range: "0.05 – 0.16 %"
+    schedule: "حدود روز ۲۵ ماه · 09:00 GMT"
+    why: "نظرسنجی از خود بنگاه‌ها؛ معتبرتر از ZEW ولی دیرتر."
+    aliases:
+      - "German Ifo Business Climate"
+
+  - country: "EUR"
+    canonical: "Eurozone Flash GDP q/q"
+    fa: "GDP فلش منطقه یورو"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 8 $"
+    pct_range: "0.07 – 0.19 %"
+    schedule: "فصلی · 09:00 GMT"
+    why: "رشد بهتر = فضای بیشتر برای ECB = یورو بالا = طلا بالا."
+    aliases:
+      - "Eurozone Flash GDP q/q"
+
+  - country: "EUR"
+    canonical: "German Industrial Production m/m"
+    fa: "تولید صنعتی آلمان"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "1 – 5 $"
+    pct_range: "0.02 – 0.12 %"
+    schedule: "حدود روز ۷ ماه · 06:00 GMT"
+    why: "پرنوسان و پر از بازنگری؛ در جلسه آسیایی/اوایل اروپا منتشر می‌شود که نقدشوندگی طلا کمتر است."
+    aliases:
+      - "German Industrial Production m/m"
+
+  - country: "EUR"
+    canonical: "German Factory Orders m/m"
+    fa: "سفارش کارخانه آلمان"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "1 – 5 $"
+    pct_range: "0.02 – 0.12 %"
+    schedule: "حدود روز ۶ ماه · 06:00 GMT"
+    why: "پیش‌نگر تولید صنعتی آلمان؛ اثر مستقیم روی طلا ناچیز."
+    aliases:
+      - "German Factory Orders m/m"
+
+  - country: "EUR"
+    canonical: "German Retail Sales m/m"
+    fa: "خرده‌فروشی آلمان"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "1 – 4 $"
+    pct_range: "0.02 – 0.09 %"
+    schedule: "اوایل ماه · 06:00 GMT"
+    why: "بسیار پرنوسان؛ عملاً نویز برای XAUUSD."
+    aliases:
+      - "German Retail Sales m/m"
+
+  - country: "EUR"
+    canonical: "Eurozone Retail Sales m/m"
+    fa: "خرده‌فروشی منطقه یورو"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "1 – 4 $"
+    pct_range: "0.02 – 0.09 %"
+    schedule: "حدود روز ۵ ماه · 09:00 GMT"
+    why: "بخش عمده‌اش از داده‌های ملی قبلاً معلوم شده."
+    aliases:
+      - "Eurozone Retail Sales m/m"
+
+  - country: "EUR"
+    canonical: "Eurozone Unemployment Rate"
+    fa: "نرخ بیکاری منطقه یورو"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "1 – 4 $"
+    pct_range: "0.02 – 0.09 %"
+    schedule: "اوایل ماه · 09:00 GMT"
+    why: "معکوس‌کد: بیکاری بالاتر = یورو ضعیف‌تر = دلار قوی‌تر = طلا پایین. اثر بسیار کم."
+    aliases:
+      - "Eurozone Unemployment Rate"
+
+  - country: "EUR"
+    canonical: "German Final CPI m/m"
+    fa: "تورم نهایی آلمان"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "1 – 3 $"
+    pct_range: "0.02 – 0.07 %"
+    schedule: "اواسط ماه · 06:00 GMT"
+    why: "تأیید نسخه اولیه؛ تقریباً هیچ‌وقت سورپرایز ندارد."
+    aliases:
+      - "German Final CPI m/m"
+
+  - country: "GBP"
+    canonical: "Official Bank Rate"
+    fa: "نرخ بهره بانک انگلستان"
+    gold_sign: 1
+    ff_impact: "High"
+    tier: 3
+    usd_range: "7 – 20 $"
+    pct_range: "0.16 – 0.47 %"
+    bundle: "BOE"
+    schedule: "۸ بار در سال · 11:00 GMT"
+    why: "نرخ بالاتر = پوند قوی‌تر = شاخص دلار پایین‌تر = طلا بالا (غیرمستقیم)."
+    aliases:
+      - "Official Bank Rate"
+
+  - country: "GBP"
+    canonical: "MPC Official Bank Rate Votes"
+    fa: "آرای اعضای MPC"
+    gold_sign: 1
+    ff_impact: "High"
+    tier: 3
+    usd_range: "6 – 18 $"
+    pct_range: "0.14 – 0.42 %"
+    bundle: "BOE"
+    schedule: "همزمان · 11:00 GMT"
+    why: "ترکیب رأی (مثلاً ۷–۲ به نفع افزایش) اغلب بیشتر از خود نرخ که پیش‌خور شده، حرکت می‌سازد. «بالاتر» یعنی تعداد آرای انقباضی بیشتر."
+    aliases:
+      - "MPC Official Bank Rate Votes"
+
+  - country: "GBP"
+    canonical: "Monetary Policy Summary"
+    fa: "خلاصه سیاست پولی BOE"
+    gold_sign: 1
+    ff_impact: "High"
+    tier: 3
+    usd_range: "6 – 16 $"
+    pct_range: "0.14 – 0.37 %"
+    bundle: "BOE"
+    schedule: "همزمان · 11:00 GMT"
+    why: "متنی است نه عددی؛ برای ربات باید به‌صورت پنجره نوسان مدیریت شود نه سیگنال جهت‌دار."
+    aliases:
+      - "Monetary Policy Summary"
+
+  - country: "GBP"
+    canonical: "CPI y/y"
+    fa: "تورم سالانه بریتانیا"
+    gold_sign: 1
+    ff_impact: "High"
+    tier: 3
+    usd_range: "5 – 15 $"
+    pct_range: "0.12 – 0.35 %"
+    bundle: "UKCPI"
+    schedule: "چهارشنبه، حدود روز ۱۷ ماه · 07:00 GMT"
+    why: "تورم بالاتر = BOE سخت‌گیرتر = پوند بالا = طلا بالا."
+    aliases:
+      - "CPI y/y"
+
+  - country: "GBP"
+    canonical: "Core CPI y/y"
+    fa: "تورم هسته بریتانیا"
+    gold_sign: 1
+    ff_impact: "High"
+    tier: 3
+    usd_range: "5 – 14 $"
+    pct_range: "0.12 – 0.33 %"
+    bundle: "UKCPI"
+    schedule: "همزمان · 07:00 GMT"
+    why: "به‌خصوص تورم خدمات بریتانیا برای BOE عدد کلیدی است."
+    aliases:
+      - "Core CPI y/y"
+
+  - country: "GBP"
+    canonical: "Claimant Count Change"
+    fa: "تغییر مدعیان بیکاری بریتانیا"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 10 $"
+    pct_range: "0.07 – 0.23 %"
+    bundle: "UKJOBS"
+    schedule: "سه‌شنبه، حدود روز ۱۶ ماه · 07:00 GMT"
+    why: "معکوس‌کد: مدعیان بیشتر = پوند ضعیف‌تر = دلار قوی‌تر = طلا پایین."
+    aliases:
+      - "Claimant Count Change"
+
+  - country: "GBP"
+    canonical: "Average Earnings Index 3m/y"
+    fa: "شاخص دستمزد بریتانیا"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "3 – 10 $"
+    pct_range: "0.07 – 0.23 %"
+    bundle: "UKJOBS"
+    schedule: "همزمان · 07:00 GMT"
+    why: "کانال دستمزد→تورم خدمات؛ در بریتانیا این عدد برای BOE از خود CPI هم حساس‌تر بوده."
+    aliases:
+      - "Average Earnings Index 3m/y"
+
+  - country: "GBP"
+    canonical: "UK Unemployment Rate"
+    fa: "نرخ بیکاری بریتانیا"
+    gold_sign: -1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "2 – 6 $"
+    pct_range: "0.05 – 0.14 %"
+    bundle: "UKJOBS"
+    schedule: "همزمان · 07:00 GMT"
+    why: "کیفیت آماری این سری پایین است و بازار وزن کمی به آن می‌دهد."
+    aliases:
+      - "UK Unemployment Rate"
+
+  - country: "GBP"
+    canonical: "GDP m/m"
+    fa: "GDP ماهانه بریتانیا"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "2 – 8 $"
+    pct_range: "0.05 – 0.19 %"
+    schedule: "حدود روز ۱۲ ماه · 07:00 GMT"
+    why: "بریتانیا تنها اقتصاد بزرگی است که GDP ماهانه می‌دهد؛ برای همین بیشتر از GDP فصلی دیده می‌شود."
+    aliases:
+      - "GDP m/m"
+
+  - country: "GBP"
+    canonical: "Retail Sales m/m"
+    fa: "خرده‌فروشی بریتانیا"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "2 – 7 $"
+    pct_range: "0.05 – 0.16 %"
+    schedule: "جمعه، حدود روز ۲۰ ماه · 07:00 GMT"
+    why: "پرنوسان؛ اثر روی طلا اغلب زیر ۵ دلار مگر انحراف بسیار بزرگ."
+    aliases:
+      - "Retail Sales m/m"
+
+  - country: "GBP"
+    canonical: "Flash Manufacturing/Services PMI"
+    fa: "PMI فلش بریتانیا"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "1 – 5 $"
+    pct_range: "0.02 – 0.12 %"
+    schedule: "حدود روز ۲۳ ماه · 09:30 GMT"
+    why: "چند ساعت قبل از PMI فلش آمریکا منتشر می‌شود و معمولاً توسط آن پوشانده می‌شود."
+    aliases:
+      - "Flash Manufacturing/Services PMI"
+
+  - country: "GBP"
+    canonical: "BOE Inflation Report Hearings"
+    fa: "جلسات استماع تورم BOE"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 2
+    usd_range: "2 – 7 $"
+    pct_range: "0.05 – 0.16 %"
+    schedule: "چند بار در سال · متغیر"
+    why: "متنی و بدون Forecast عددی؛ فقط پنجره نوسان."
+    aliases:
+      - "BOE Inflation Report Hearings"
+
+  - country: "GBP"
+    canonical: "PPI Input m/m"
+    fa: "قیمت نهاده تولید بریتانیا"
+    gold_sign: 1
+    ff_impact: "Medium"
+    tier: 1
+    usd_range: "1 – 3 $"
+    pct_range: "0.02 – 0.07 %"
+    bundle: "UKCPI"
+    schedule: "همزمان با CPI · 07:00 GMT"
+    why: "تحت‌الشعاع CPI همان دقیقه؛ عملاً بی‌اثر."
+    aliases:
+      - "PPI Input m/m"
+
+# Events without a numeric forecast (speeches, statements, minutes) — no
+# surprise/gold_sign is computed for these (there's nothing to diff against);
+# they exist here only so blackout.py / news_reporter can name them and size a
+# volatility window from `tier`, not to feed compute_surprise().
+no_forecast_events:
+  - country: "USD"
+    canonical: "FOMC Statement / Press Conference"
+    fa: "بیانیه و کنفرانس خبری FOMC"
+    tier: 5
+    usd_range: "35 – 120 $"
+    note: "واتش با اجتناب صریح از forward guidance کار می‌کند؛ بنابراین لحن کنفرانس خبری بیشترین منبع نوسان طلا در کل ماه است. پنجره: از ۱۸:۰۰ تا ۱۹:۳۰ GMT."
+    aliases:
+      - "FOMC Statement / Press Conference"
+
+  - country: "USD"
+    canonical: "FOMC Economic Projections (Dot Plot)"
+    fa: "پیش‌بینی‌های اقتصادی فِد"
+    tier: 4
+    usd_range: "25 – 60 $"
+    note: "وزنش نسبت به گذشته کمتر شده چون رئیس فِد پیش‌بینی خودش را ارائه نمی‌دهد. میانه سایر اعضا همچنان حرکت می‌سازد."
+    aliases:
+      - "FOMC Economic Projections"
+
+  - country: "USD"
+    canonical: "FOMC Meeting Minutes"
+    fa: "صورت‌جلسه FOMC"
+    tier: 4
+    usd_range: "10 – 30 $"
+    note: "سه هفته بعد از جلسه · 18:00 GMT. در نبود forward guidance، صورت‌جلسه جای خالی آن را پر می‌کند و اثرش بالا رفته."
+    aliases:
+      - "FOMC Meeting Minutes"
+
+  - country: "USD"
+    canonical: "Fed Chair Speaks / Testimony"
+    fa: "سخنرانی رئیس فِد"
+    tier: 5
+    usd_range: "30 – 90 $"
+    note: "سخنرانی جکسون‌هول اوت ۲۰۲۶ به‌تنهایی قیمت‌گذاری نرخ بهره را وارونه کرد. هر سخنرانی برنامه‌ریزی‌شده باید پنجره ممنوعه معامله باشد."
+    aliases:
+      - "Fed Chair Speaks / Testimony"
+
+  - country: "EUR"
+    canonical: "ECB Press Conference"
+    fa: "کنفرانس خبری ECB"
+    tier: 4
+    usd_range: "10 – 25 $"
+    note: "۴۵ دقیقه بعد از اعلام نرخ · 12:45 GMT. اغلب بیشتر از خود نرخ حرکت می‌سازد."
+    aliases:
+      - "ECB Press Conference"
+
+  - country: "GBP"
+    canonical: "BOE Gov Speaks"
+    fa: "سخنرانی رئیس BOE"
+    tier: 2
+    usd_range: "3 – 10 $"
+    note: "اثر مستقیم روی طلا محدود، مگر در هفته تصمیم نرخ."
+    aliases:
+      - "BOE Gov Speaks"
+

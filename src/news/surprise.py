@@ -20,19 +20,39 @@ def load_min_samples_for_z(params_path: Path = PARAMS_PATH) -> int:
     return params["news"]["surprise"]["min_samples_for_z"]
 
 
-def load_event_map(event_map_path: Path = EVENT_MAP_PATH) -> dict[str, int]:
-    """Returns {alias_lowercased: gold_sign}."""
+def load_event_map(event_map_path: Path = EVENT_MAP_PATH) -> dict[str, dict[str, int]]:
+    """Returns {alias_lowercased: {country_upper: gold_sign}}.
+
+    Keyed by (alias, country) rather than alias alone: the SAME title (e.g.
+    "CPI y/y", "GDP m/m", "Retail Sales m/m") carries the OPPOSITE gold_sign
+    depending on currency (config/event_map.yaml header explains why) — a
+    flat alias->gold_sign map would silently let whichever country's entry
+    loaded last win for every other country's event of the same name.
+    """
     with open(event_map_path) as f:
         data = yaml.safe_load(f)
-    lookup = {}
+    lookup: dict[str, dict[str, int]] = {}
     for entry in data["events"]:
+        country = entry["country"].strip().upper()
         for alias in entry["aliases"]:
-            lookup[alias.strip().lower()] = entry["gold_sign"]
+            lookup.setdefault(alias.strip().lower(), {})[country] = entry["gold_sign"]
     return lookup
 
 
-def lookup_gold_sign(event_title: str, event_map: dict[str, int]) -> int | None:
-    return event_map.get(event_title.strip().lower())
+def lookup_gold_sign(
+    event_title: str, event_map: dict[str, dict[str, int]], country: str | None = None
+) -> int | None:
+    """country=None matches only if every country sharing this title agrees
+    on the same gold_sign (e.g. a USD-only title) — otherwise, per the
+    project's "don't guess" rule, this returns None rather than picking one
+    currency's mapping for an event whose currency we don't actually know."""
+    candidates = event_map.get(event_title.strip().lower())
+    if not candidates:
+        return None
+    if country is not None:
+        return candidates.get(country.strip().upper())
+    signs = set(candidates.values())
+    return signs.pop() if len(signs) == 1 else None
 
 
 def _sign(x: float) -> int:
@@ -48,8 +68,9 @@ def compute_surprise(
     actual: float,
     forecast: float,
     historical_surprises: list[float],
-    event_map: dict[str, int] | None = None,
+    event_map: dict[str, dict[str, int]] | None = None,
     min_samples_for_z: int | None = None,
+    country: str | None = None,
 ) -> dict[str, Any]:
     """
     surprise      = actual - forecast
@@ -59,13 +80,17 @@ def compute_surprise(
 
     historical_surprises must NOT include the current event's own surprise
     (CLAUDE.md rule 1 — no looking into data that includes the point itself).
+
+    `country` disambiguates titles shared across currencies (see
+    lookup_gold_sign) — pass it whenever the caller knows the event's
+    currency (it always does; it's a column on news_events).
     """
     if event_map is None:
         event_map = load_event_map()
     if min_samples_for_z is None:
         min_samples_for_z = load_min_samples_for_z()
 
-    gold_sign = lookup_gold_sign(event_title, event_map)
+    gold_sign = lookup_gold_sign(event_title, event_map, country=country)
     surprise = actual - forecast
 
     result: dict[str, Any] = {

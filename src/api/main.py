@@ -184,7 +184,7 @@ def _fetch_events_with_surprise(where_sql: str, params: tuple, limit: int = 40) 
             "forecast": forecast,
             "previous": previous,
         }
-        gold_sign = lookup_gold_sign(title, event_map)
+        gold_sign = lookup_gold_sign(title, event_map, country=country)
         out.append({
             "event": event,
             "surprise_result": {"gold_sign": gold_sign, "mapped": gold_sign is not None},
@@ -321,7 +321,7 @@ async def news_alerts_dispatch():
                 "title": title, "country": country, "impact": impact,
                 "ts_utc": ts_utc, "forecast": forecast, "previous": previous,
             }
-            gold_sign = lookup_gold_sign(title, event_map)
+            gold_sign = lookup_gold_sign(title, event_map, country=country)
             surprise_result = {"gold_sign": gold_sign, "mapped": gold_sign is not None}
             messages.append(build_upcoming_message(event, surprise_result))
 
