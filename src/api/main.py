@@ -145,16 +145,147 @@ async def news_calendar_ingest():
 
     return await run_in_threadpool(_run)
 
-@app.get("/news/upcoming")
-async def news_upcoming():
-    """SPEC.md 4.7 / کار 5: upcoming High/Medium events formatted for Telegram /news command.
-    No actual yet — shows schedule + expected direction only.
+def _fetch_events_with_surprise(where_sql: str, params: tuple, limit: int = 40) -> list[dict]:
+    """Shared by /news/upcoming, /news/digest/weekly, /news/digest/daily.
+    Returns [{"event": {...}, "surprise_result": {...}}] ordered by ts_utc.
+    Sync (psycopg2) — matches the rest of src/news, run via run_in_threadpool.
     """
-    from starlette.concurrency import run_in_threadpool
     import datetime as _dt
     from src.news.fetch_calendar import get_connection
     from src.news.surprise import load_event_map, lookup_gold_sign
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT title, country, impact, ts_utc, forecast, previous
+                FROM news_events
+                WHERE {where_sql}
+                ORDER BY ts_utc ASC
+                LIMIT %s
+                """,
+                (*params, limit),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    event_map = load_event_map()
+    out = []
+    for title, country, impact, ts_utc, forecast, previous in rows:
+        if ts_utc.tzinfo is None:
+            ts_utc = ts_utc.replace(tzinfo=_dt.timezone.utc)
+        event = {
+            "title": title,
+            "country": country,
+            "impact": impact,
+            "ts_utc": ts_utc,
+            "forecast": forecast,
+            "previous": previous,
+        }
+        gold_sign = lookup_gold_sign(title, event_map)
+        out.append({
+            "event": event,
+            "surprise_result": {"gold_sign": gold_sign, "mapped": gold_sign is not None},
+        })
+    return out
+
+
+@app.get("/news/upcoming")
+async def news_upcoming():
+    """SPEC.md 4.7 / کار 5: upcoming High/Medium events formatted for Telegram /news command.
+    No actual yet — shows schedule + expected direction only. One grouped
+    Telegram HTML digest (SPEC 4.7 revamp: Jalali day headers, single
+    disclaimer) rather than one message per event.
+    """
+    from src.news.news_reporter import build_upcoming_digest
+
+    def _run():
+        items = _fetch_events_with_surprise(
+            "ts_utc > NOW() AND impact IN ('High', 'Medium') AND (actual IS NULL OR actual = '')",
+            (),
+            limit=20,
+        )
+        digest = build_upcoming_digest(items)
+        return {
+            "count": len(items),
+            "digest": digest,
+            "events": [
+                {
+                    "title": it["event"]["title"],
+                    "ts_utc": it["event"]["ts_utc"].isoformat(),
+                    "impact": it["event"]["impact"],
+                }
+                for it in items
+            ],
+        }
+
+    return await run_in_threadpool(_run)
+
+
+@app.get("/news/digest/weekly")
+async def news_digest_weekly():
+    """n8n: Monday 10:00 Tehran weekly digest — all High/Medium USD/EUR/GBP
+    events in the next 7 days. Always has content to send (even if empty)."""
+    from src.news.news_reporter import build_upcoming_digest
+
+    def _run():
+        items = _fetch_events_with_surprise(
+            "ts_utc > NOW() AND ts_utc < NOW() + INTERVAL '7 days' "
+            "AND impact IN ('High', 'Medium') AND (actual IS NULL OR actual = '')",
+            (),
+        )
+        digest = build_upcoming_digest(items, header="🗞 <b>اخبار اقتصادی این هفته</b>")
+        return {"count": len(items), "digest": digest}
+
+    return await run_in_threadpool(_run)
+
+
+@app.get("/news/digest/daily")
+async def news_digest_daily():
+    """n8n: daily digest — today's (Tehran calendar day) High/Medium events.
+    n8n gates sending on count > 0 (SPEC: "هر روزی که خبر داریم")."""
+    from zoneinfo import ZoneInfo
+    from src.news.news_reporter import build_upcoming_digest
+
+    def _run():
+        now_tehran = datetime.now(ZoneInfo("Asia/Tehran"))
+        day_start_tehran = now_tehran.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end_tehran = day_start_tehran + timedelta(days=1)
+        day_start_utc = day_start_tehran.astimezone(timezone.utc)
+        day_end_utc = day_end_tehran.astimezone(timezone.utc)
+
+        items = _fetch_events_with_surprise(
+            "ts_utc >= %s AND ts_utc < %s "
+            "AND impact IN ('High', 'Medium') AND (actual IS NULL OR actual = '')",
+            (day_start_utc, day_end_utc),
+        )
+        digest = build_upcoming_digest(items, header="🗞 <b>اخبار اقتصادی امروز</b>")
+        return {"count": len(items), "digest": digest}
+
+    return await run_in_threadpool(_run)
+
+
+@app.post("/news/alerts/dispatch")
+async def news_alerts_dispatch():
+    """n8n: fires every `pre_alert.trigger_interval_minutes` (params.yaml).
+    Atomically claims (UPDATE ... RETURNING) events whose release falls
+    inside the pre_alert window ahead of now, so a race between overlapping
+    n8n runs can't double-send. Each claimed event gets its own alert
+    message (build_upcoming_message — same anti-repaint direction lookup as
+    everywhere else in src/news)."""
+    import yaml
+    from pathlib import Path
+    from src.news.fetch_calendar import get_connection
+    from src.news.surprise import load_event_map, lookup_gold_sign
     from src.news.news_reporter import build_upcoming_message
+
+    params_path = Path(__file__).resolve().parents[2] / "config" / "params.yaml"
+    with open(params_path) as f:
+        pre_alert = yaml.safe_load(f)["news"]["pre_alert"]
+    window_minutes = pre_alert["window_minutes"]
+    trigger_interval_minutes = pre_alert["trigger_interval_minutes"]
 
     def _run():
         conn = get_connection()
@@ -162,42 +293,40 @@ async def news_upcoming():
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT title, country, impact, ts_utc, forecast, previous
-                    FROM news_events
-                    WHERE ts_utc > NOW()
-                      AND impact IN ('High', 'Medium')
-                      AND (actual IS NULL OR actual = '')
-                    ORDER BY ts_utc ASC
-                    LIMIT 20
+                    UPDATE news_events
+                    SET pre_alert_sent = true
+                    WHERE id IN (
+                        SELECT id FROM news_events
+                        WHERE pre_alert_sent = false
+                          AND impact IN ('High', 'Medium')
+                          AND ts_utc >= NOW() + %s * INTERVAL '1 minute'
+                          AND ts_utc <  NOW() + %s * INTERVAL '1 minute'
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    RETURNING title, country, impact, ts_utc, forecast, previous
                     """,
+                    (window_minutes - trigger_interval_minutes, window_minutes),
                 )
                 rows = cur.fetchall()
+            conn.commit()
         finally:
             conn.close()
 
         event_map = load_event_map()
-        results = []
+        messages = []
         for title, country, impact, ts_utc, forecast, previous in rows:
             if ts_utc.tzinfo is None:
-                ts_utc = ts_utc.replace(tzinfo=_dt.timezone.utc)
+                ts_utc = ts_utc.replace(tzinfo=timezone.utc)
             event = {
-                "title": title,
-                "country": country,
-                "impact": impact,
-                "ts_utc": ts_utc,
-                "forecast": forecast,
-                "previous": previous,
+                "title": title, "country": country, "impact": impact,
+                "ts_utc": ts_utc, "forecast": forecast, "previous": previous,
             }
             gold_sign = lookup_gold_sign(title, event_map)
             surprise_result = {"gold_sign": gold_sign, "mapped": gold_sign is not None}
-            msg = build_upcoming_message(event, surprise_result)
-            results.append({
-                "title": title,
-                "ts_utc": ts_utc.isoformat(),
-                "impact": impact,
-                "message": msg,
-            })
-        return {"count": len(results), "events": results}
+            messages.append(build_upcoming_message(event, surprise_result))
+
+        text = "\n\n――――――――――――\n\n".join(messages)
+        return {"count": len(messages), "text": text}
 
     return await run_in_threadpool(_run)
 

@@ -1,0 +1,221 @@
+{
+  "id": "xauusdNewsDigest01",
+  "name": "XAUUSD News Digest + Pre-alert",
+  "description": "2026-09-27 news revamp: (1) Monday 10:00 Tehran weekly digest of all upcoming High/Medium USD/EUR/GBP events, (2) daily digest of today's events (sent only when count>0), (3) a channel alert `pre_alert.window_minutes` (params.yaml, default 30) before each event's release. All formatting/grouping/direction-lookup happens in Python (src/news/news_reporter.py, src/api/main.py) per CLAUDE.md \"no computation in n8n\" — this workflow only schedules, calls the API, and forwards the ready text to Telegram.",
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Tehran"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "node-news-digest-weekly-trigger",
+      "name": "Monday 10:00 (Tehran)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-400, -300]
+    },
+    {
+      "parameters": {
+        "url": "http://172.18.0.1:8000/news/digest/weekly",
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-news-digest-weekly-fetch",
+      "name": "news/digest/weekly",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [-140, -300]
+    },
+    {
+      "parameters": {
+        "chatId": "-1003415771278",
+        "text": "={{ $json.digest }}",
+        "additionalFields": { "parseMode": "HTML" }
+      },
+      "id": "node-news-digest-weekly-send",
+      "name": "Send weekly digest",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [140, -300],
+      "credentials": {
+        "telegramApi": { "id": "xauusdBotTelegramCred01", "name": "XAUUSD Bot Telegram" }
+      }
+    },
+
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "node-news-digest-daily-trigger",
+      "name": "Every day 08:00 (Tehran)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-400, -80]
+    },
+    {
+      "parameters": {
+        "url": "http://172.18.0.1:8000/news/digest/daily",
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-news-digest-daily-fetch",
+      "name": "news/digest/daily",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [-140, -80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "cond-news-digest-daily-hascount",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-news-digest-daily-if",
+      "name": "Any events today?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [120, -80]
+    },
+    {
+      "parameters": {
+        "chatId": "-1003415771278",
+        "text": "={{ $json.digest }}",
+        "additionalFields": { "parseMode": "HTML" }
+      },
+      "id": "node-news-digest-daily-send",
+      "name": "Send daily digest",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [400, -160],
+      "credentials": {
+        "telegramApi": { "id": "xauusdBotTelegramCred01", "name": "XAUUSD Bot Telegram" }
+      }
+    },
+
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "minutes", "minutesInterval": 10 }
+          ]
+        }
+      },
+      "id": "node-news-prealert-trigger",
+      "name": "Every 10 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-400, 160]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://172.18.0.1:8000/news/alerts/dispatch",
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-news-prealert-fetch",
+      "name": "news/alerts/dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [-140, 160]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "cond-news-prealert-hascount",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-news-prealert-if",
+      "name": "Any event ~30min away?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [120, 160]
+    },
+    {
+      "parameters": {
+        "chatId": "-1003415771278",
+        "text": "⏰ ۳۰ دقیقه تا این رویداد(ها):\n\n{{ $json.text }}",
+        "additionalFields": { "parseMode": "HTML" }
+      },
+      "id": "node-news-prealert-send",
+      "name": "Send pre-alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [400, 80],
+      "credentials": {
+        "telegramApi": { "id": "xauusdBotTelegramCred01", "name": "XAUUSD Bot Telegram" }
+      }
+    }
+  ],
+  "connections": {
+    "Monday 10:00 (Tehran)": {
+      "main": [[{ "node": "news/digest/weekly", "type": "main", "index": 0 }]]
+    },
+    "news/digest/weekly": {
+      "main": [[{ "node": "Send weekly digest", "type": "main", "index": 0 }]]
+    },
+
+    "Every day 08:00 (Tehran)": {
+      "main": [[{ "node": "news/digest/daily", "type": "main", "index": 0 }]]
+    },
+    "news/digest/daily": {
+      "main": [[{ "node": "Any events today?", "type": "main", "index": 0 }]]
+    },
+    "Any events today?": {
+      "main": [[{ "node": "Send daily digest", "type": "main", "index": 0 }], []]
+    },
+
+    "Every 10 minutes": {
+      "main": [[{ "node": "news/alerts/dispatch", "type": "main", "index": 0 }]]
+    },
+    "news/alerts/dispatch": {
+      "main": [[{ "node": "Any event ~30min away?", "type": "main", "index": 0 }]]
+    },
+    "Any event ~30min away?": {
+      "main": [[{ "node": "Send pre-alert", "type": "main", "index": 0 }], []]
+    }
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "tags": []
+}

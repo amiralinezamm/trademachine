@@ -40,8 +40,8 @@ def _get(path: str, **params) -> dict:
     return r.json()
 
 
-async def _reply(update: Update, text: str) -> None:
-    await update.message.reply_text(text, parse_mode=None)
+async def _reply(update: Update, text: str, parse_mode: str | None = None) -> None:
+    await update.message.reply_text(text, parse_mode=parse_mode)
 
 
 # ── command handlers ──────────────────────────────────────────────────────────
@@ -89,7 +89,8 @@ async def cmd_gaps(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         data = _get("/news/upcoming")
-        await _reply(update, fmt_news(data))
+        # digest is rendered with Telegram HTML (<b>, <blockquote>) server-side
+        await _reply(update, fmt_news(data), parse_mode="HTML")
     except Exception as exc:
         log.exception("cmd_news error")
         await _reply(update, f"❌ خطا در دریافت اخبار: {exc}")

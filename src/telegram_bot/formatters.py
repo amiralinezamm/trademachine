@@ -89,17 +89,13 @@ def fmt_gaps(data: dict) -> str:
 
 
 def fmt_news(data: dict) -> str:
-    """Format /news/upcoming response."""
-    events = data.get("events", [])
-    if not events:
+    """Format /news/upcoming response. The backend (build_upcoming_digest,
+    src/news/news_reporter.py) already renders the full Telegram-HTML digest
+    — grouped by Jalali day, one disclaimer — so this is a thin pass-through.
+    Send with parse_mode="HTML" (see src/telegram_bot/bot.py cmd_news)."""
+    digest = data.get("digest")
+    if digest:
+        return digest
+    if not data.get("events"):
         return "📭 رویداد اقتصادی پیش‌رو: ندارد" + DISCLAIMER
-
-    lines = [f"📰 رویدادهای پیش‌رو ({data.get('count', len(events))} رویداد):"]
-    for ev in events[:8]:
-        msg = ev.get("message", "").strip()
-        if msg:
-            lines.append(msg)
-        else:
-            lines.append(f"  • {ev.get('title', '?')} — {ev.get('ts_utc', '')[:16]}")
-
-    return "\n".join(lines) + DISCLAIMER
+    return f"📰 رویدادهای پیش‌رو ({data.get('count', 0)} رویداد)" + DISCLAIMER

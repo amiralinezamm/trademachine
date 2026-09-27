@@ -34,6 +34,16 @@ news:
     # band_width: deferred. Full-history fallback until DB has paired z/move rows.
     band_width: 0.5
 
+  pre_alert:
+    # /news/alerts/dispatch (n8n "30 minutes before" channel push, 2026-09-27).
+    # Claims events whose ts_utc falls in
+    # [now + (window_minutes - trigger_interval_minutes), now + window_minutes).
+    # trigger_interval_minutes MUST match the n8n schedule trigger's own
+    # interval (n8n/xauusd_news_digest.json) — otherwise the window has gaps
+    # or overlaps and an event can be missed or double-alerted.
+    window_minutes: 30
+    trigger_interval_minutes: 10
+
 mt5_bridge:
   # WM Markets demo account, confirmed same depth on live (user, 2026-09-15).
   symbol: "XAUUSD@"

@@ -11,6 +11,7 @@ from src.news.news_reporter import (
     DIRECTION_LABEL,
     _to_tehran_hhmm,
     build_release_message,
+    build_upcoming_digest,
     build_upcoming_message,
 )
 
@@ -267,3 +268,60 @@ def test_upcoming_message_unmapped_event():
     surprise = {"gold_sign": None, "mapped": False}
     msg = build_upcoming_message(event=_event(), surprise_result=surprise)
     assert "نامشخص" in msg or "یافت نشد" in msg
+
+
+# ---------------------------------------------------------------------------
+# build_upcoming_digest
+# ---------------------------------------------------------------------------
+
+def _event2():
+    return {
+        "title": "CPI m/m",
+        "country": "USD",
+        "impact": "Medium",
+        "ts_utc": T0 + timedelta(days=1),
+        "forecast": "0.3%",
+        "previous": "0.2%",
+    }
+
+
+def test_digest_empty_events_still_has_disclaimer():
+    msg = build_upcoming_digest([])
+    assert "آزمایشی" in msg
+
+
+def test_digest_groups_same_day_events_under_one_header():
+    items = [
+        {"event": _event(), "surprise_result": {"gold_sign": -1, "mapped": True}},
+        {"event": {**_event(), "title": "Second Event Same Day"},
+         "surprise_result": {"gold_sign": None, "mapped": False}},
+    ]
+    msg = build_upcoming_digest(items)
+    # Both events present, but only one day-divider block for a shared day
+    assert msg.count("――――――――――――") == 1
+    assert "Non-Farm Employment Change" in msg
+    assert "Second Event Same Day" in msg
+
+
+def test_digest_separates_different_days():
+    items = [
+        {"event": _event(), "surprise_result": {"gold_sign": -1, "mapped": True}},
+        {"event": _event2(), "surprise_result": {"gold_sign": -1, "mapped": True}},
+    ]
+    msg = build_upcoming_digest(items)
+    assert msg.count("――――――――――――") == 2
+
+
+def test_digest_has_single_trailing_disclaimer_not_per_event():
+    items = [
+        {"event": _event(), "surprise_result": {"gold_sign": -1, "mapped": True}},
+        {"event": _event2(), "surprise_result": {"gold_sign": -1, "mapped": True}},
+    ]
+    msg = build_upcoming_digest(items)
+    assert msg.count("آزمایشی") == 1
+
+
+def test_digest_wraps_events_in_blockquote():
+    items = [{"event": _event(), "surprise_result": {"gold_sign": -1, "mapped": True}}]
+    msg = build_upcoming_digest(items)
+    assert "<blockquote>" in msg and "</blockquote>" in msg
