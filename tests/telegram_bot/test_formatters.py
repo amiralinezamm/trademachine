@@ -22,6 +22,57 @@ def test_status_no_signal():
     assert DISCLAIMER in msg
 
 
+def test_status_no_signal_without_as_of():
+    """/signal/last (unlike the old /signal/latest) never returns an
+    'as_of' field for the no-signal-stored case -- must not print a bare
+    'آخرین بررسی: ' line."""
+    data = {"signal": None, "reason": "no_signal_stored"}
+    msg = fmt_status(data)
+    assert "سیگنال فعال: ندارد" in msg
+    assert "no_signal_stored" in msg
+    assert "آخرین بررسی" not in msg
+    assert DISCLAIMER in msg
+
+
+def test_status_signal_shows_outcome_when_present():
+    data = {
+        "signal": {
+            "direction": "BUY",
+            "entry": 2350.5,
+            "ts_utc": "2026-09-19T10:05:00+00:00",
+            "outcome": "tp",
+            "components": {
+                "level_kind": "support",
+                "level_price_low": 2340.0,
+                "level_price_high": 2345.0,
+                "level_strength": 1.75,
+                "atr": 8.5,
+            },
+        }
+    }
+    msg = fmt_status(data)
+    assert "tp" in msg
+
+
+def test_status_signal_omits_outcome_line_when_absent():
+    data = {
+        "signal": {
+            "direction": "BUY",
+            "entry": 2350.5,
+            "ts_utc": "2026-09-19T10:05:00+00:00",
+            "components": {
+                "level_kind": "support",
+                "level_price_low": 2340.0,
+                "level_price_high": 2345.0,
+                "level_strength": 1.75,
+                "atr": 8.5,
+            },
+        }
+    }
+    msg = fmt_status(data)
+    assert "نتیجه" not in msg
+
+
 def test_status_buy_signal():
     data = {
         "signal": {

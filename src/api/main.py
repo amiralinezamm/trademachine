@@ -14,6 +14,7 @@ from src.engine.signal_store import (
     fetch_active_levels,
     fetch_atr_at,
     fetch_latest_closed_candle,
+    fetch_latest_signal,
     fetch_last_signal_for_direction,
     insert_signal,
 )
@@ -618,6 +619,33 @@ async def signal_latest(
     if tf not in allowed_tfs:
         raise HTTPException(status_code=422, detail=f"tf must be one of {allowed_tfs}")
     return await run_in_threadpool(_check_signal_sync, symbol, tf)
+
+
+def _fetch_latest_signal_sync(symbol: str, tf: str) -> dict:
+    """Read-only -- see fetch_latest_signal() docstring for why this is a
+    separate endpoint from /signal/latest (which re-runs the rule and
+    stops returning a signal once it's already stored)."""
+    conn = get_connection()
+    try:
+        sig = fetch_latest_signal(conn, symbol, tf)
+    finally:
+        conn.close()
+    if sig is None:
+        return {"signal": None, "reason": "no_signal_stored"}
+    sig["ts_utc"] = sig["ts_utc"].isoformat()
+    return {"signal": sig}
+
+
+@app.get("/signal/last")
+async def signal_last(
+    symbol: str = Query("XAUUSD@"),
+    tf: str = Query("M5"),
+):
+    """The most recently STORED signal in `signals`, for display (e.g. the
+    Telegram /status command) -- unlike /signal/latest, this never
+    re-evaluates the rule and never returns signal=None just because the
+    signal was already fired/stored earlier or price has since moved."""
+    return await run_in_threadpool(_fetch_latest_signal_sync, symbol, tf)
 
 
 

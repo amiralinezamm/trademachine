@@ -60,7 +60,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        data = _get("/signal/latest")
+        # /signal/last (not /signal/latest): the latter re-runs the rule
+        # against the current candle and stops returning a signal once it's
+        # already stored or price has moved past the level -- wrong for a
+        # "show me the last signal" command (see fetch_latest_signal()
+        # docstring in src/engine/signal_store.py).
+        data = _get("/signal/last")
         await _reply(update, fmt_status(data))
     except Exception as exc:
         log.exception("cmd_status error")

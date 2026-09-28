@@ -108,6 +108,50 @@ def insert_signal(conn, signal: dict[str, Any]) -> int | None:
         return None
 
 
+def fetch_latest_signal(conn, symbol: str, tf: str) -> dict[str, Any] | None:
+    """Most recent row in `signals` for this symbol/tf, regardless of
+    outcome or whether it was 'just' fired. `signals` has no symbol/tf
+    columns of its own (SPEC.md 4.15 schema) -- level_reversion.py always
+    writes them into components, so filter through there.
+
+    This is a plain read -- no rule evaluation, no insert. It exists
+    because /signal/latest (_check_signal_sync) re-runs check_level_reversion
+    against the CURRENT candle and returns signal=None once that signal is
+    already stored (reason='already_fired') or once price has moved past
+    the triggering level -- so polling it after the fact (e.g. a Telegram
+    /status a few minutes after n8n already fired and stored the signal)
+    shows nothing even though a real signal exists. This function is for
+    display: "what was the last signal", not "does one fire right now"."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, ts_utc, direction, entry, stop_loss, take_profit,
+                   confidence, components, rule_version, outcome, pnl_usd
+            FROM signals
+            WHERE components->>'symbol' = %s AND components->>'tf' = %s
+            ORDER BY ts_utc DESC
+            LIMIT 1
+            """,
+            (symbol, tf),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row[0],
+        "ts_utc": row[1],
+        "direction": row[2],
+        "entry": float(row[3]) if row[3] is not None else None,
+        "stop_loss": float(row[4]) if row[4] is not None else None,
+        "take_profit": float(row[5]) if row[5] is not None else None,
+        "confidence": float(row[6]) if row[6] is not None else None,
+        "components": row[7],
+        "rule_version": row[8],
+        "outcome": row[9],
+        "pnl_usd": float(row[10]) if row[10] is not None else None,
+    }
+
+
 def fetch_last_signal_for_direction(
     conn, direction: str, as_of_ts
 ) -> "dict[str, Any] | None":

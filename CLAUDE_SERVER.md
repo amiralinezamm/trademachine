@@ -25,7 +25,7 @@ ssh xauusd-bot "cd /opt/xauusd-bot && /opt/xauusd-bot/src/api/venv/bin/python /t
 ```
 /opt/xauusd-bot/
 ├── src/
-│   ├── api/main.py              # FastAPI — endpoints: /signal/latest /levels/near-price /gaps/open /news/upcoming /health
+│   ├── api/main.py              # FastAPI — endpoints: /signal/latest /signal/last /levels/near-price /gaps/open /news/upcoming /health
 │   ├── engine/
 │   │   ├── level_reversion.py  # check_level_reversion() — منطق اصلی سیگنال
 │   │   └── signal_store.py     # fetch_latest_closed_candle, fetch_active_levels
@@ -99,3 +99,4 @@ b28854e docs: register double_touch_confidence_multiplier as proposed rule
 - اتصال DB از طریق get_connection() که .env را از root پروژه می‌خواند
 - replay کامل روی 212,972 کندل ≈ 6 ساعت طول می‌کشد
 - levels_history rebuild ≈ 15 دقیقه (scripts/rebuild_levels_history.py)
+- `/signal/latest` قانون را دوباره روی کندل جاری اجرا می‌کند و به محض ذخیره‌شدن سیگنال (یا رد شدنش) دیگر signal=None برمی‌گرداند — برای «نمایش آخرین سیگنال» (مثل /status ربات تلگرام) به‌جایش `/signal/last` را صدا بزن (فقط خواندن از جدول signals، بدون اجرای دوباره‌ی قانون؛ 2026-09-28)
