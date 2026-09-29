@@ -166,3 +166,52 @@ def test_reversal_close_no_conflict():
 def test_reversal_close_unknown_structure_never_triggers():
     assert detect_reversal_close("BUY", None) is False
     assert detect_reversal_close("BUY", "unknown") is False
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-29: signed distances + shared stop + research-only shadow exit
+# ---------------------------------------------------------------------------
+
+from src.engine.exit_rules import level_a_stop, shadow_min_rr_exit  # noqa: E402
+
+
+def test_buy_tp_behind_entry_is_rejected_not_counted_as_reward():
+    """B.price_low just above entry: TP = B.low - margin lands BELOW a BUY
+    entry. abs() used to turn that into a positive 'reward'."""
+    level_a = _level_a_buy()
+    entry = 2343.0
+    b_behind = _level("B", "resistance", 2343.5, 2344.0, 1.4)  # tp = 2342.5 < entry
+    levels = [level_a, b_behind] + _fillers("support")
+    result = compute_level_based_sl_tp("BUY", level_a, entry, ATR, levels, net_votes=100.0, params=PARAMS)
+    assert result is None
+
+
+def test_entry_already_through_stop_is_rejected():
+    """Next-bar open gapped below level A's stop: sl_dist would be negative
+    for a BUY; abs() used to make it look like a normal risk."""
+    level_a = _level_a_buy()          # stop = 2339.0
+    entry = 2338.0                    # already below the stop
+    b = _level("B", "resistance", 2353.0, 2355.0, 1.4)
+    levels = [level_a, b] + _fillers("support")
+    assert compute_level_based_sl_tp("BUY", level_a, entry, ATR, levels, 1.0, PARAMS) is None
+
+
+def test_level_a_stop_matches_both_directions():
+    assert level_a_stop("BUY", _level_a_buy(), ATR, PARAMS) == pytest.approx(2339.0)
+    res_a = _level("A", "resistance", 2360.0, 2362.0, 1.5)
+    assert level_a_stop("SELL", res_a, ATR, PARAMS) == pytest.approx(2363.0)
+
+
+def test_shadow_exit_is_exactly_min_rr():
+    level_a = _level_a_buy()          # stop 2339.0
+    ex = shadow_min_rr_exit("BUY", level_a, 2343.0, ATR, PARAMS)  # risk 4.0
+    assert ex["stop_loss"] == pytest.approx(2339.0)
+    assert ex["take_profit"] == pytest.approx(2351.0)             # 2343 + 2*4
+    assert ex["rr"] == 2.0
+
+
+def test_shadow_exit_sell_and_invalid_entry():
+    res_a = _level("A", "resistance", 2360.0, 2362.0, 1.5)       # stop 2363
+    ex = shadow_min_rr_exit("SELL", res_a, 2359.0, ATR, PARAMS)   # risk 4.0
+    assert ex["take_profit"] == pytest.approx(2351.0)
+    assert shadow_min_rr_exit("SELL", res_a, 2364.0, ATR, PARAMS) is None  # entry beyond stop

@@ -47,6 +47,38 @@ def load_exit_rules_params(path: Path = PARAMS_PATH) -> dict[str, Any]:
         return yaml.safe_load(f)["exit_rules"]
 
 
+def level_a_stop(direction: str, level_a: dict[str, Any], atr: float, params: dict[str, Any]) -> float:
+    """SL beyond the touched level A by sl_tp_margin_atr_mult * ATR. Shared by
+    compute_level_based_sl_tp and shadow_min_rr_exit so both use one formula."""
+    margin = float(params["sl_tp_margin_atr_mult"]) * atr
+    if direction == "BUY":
+        return float(level_a["price_low"]) - margin
+    return float(level_a["price_high"]) + margin
+
+
+def shadow_min_rr_exit(
+    direction: str,
+    level_a: dict[str, Any],
+    entry: float,
+    atr: float,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """RESEARCH ONLY -- never used by the live path. For candidates that got
+    no level-based exit (no qualifying level B), evaluates them anyway with
+    the same level-A stop and a synthetic TP at exactly min_rr x risk, so a
+    backtest can answer "were these entries any good?" instead of silently
+    dropping them. Returns None when entry is already beyond the stop."""
+    if params is None:
+        params = load_exit_rules_params()
+    sl = level_a_stop(direction, level_a, atr, params)
+    sign = 1.0 if direction == "BUY" else -1.0
+    risk = (entry - sl) * sign
+    if risk <= 0:
+        return None
+    min_rr = float(params["min_rr"])
+    return {"stop_loss": sl, "take_profit": entry + sign * min_rr * risk, "rr": min_rr}
+
+
 def compute_level_based_sl_tp(
     direction: str,
     level_a: dict[str, Any],
@@ -82,9 +114,9 @@ def compute_level_based_sl_tp(
     strength_median = statistics.median(strengths)
 
     level_a_id = level_a.get("id")
+    sl = level_a_stop(direction, level_a, atr, params)
 
     if direction == "BUY":
-        sl = float(level_a["price_low"]) - margin
         candidates = [
             lvl for lvl in active
             if lvl["kind"] == "resistance" and lvl.get("id") != level_a_id
@@ -93,7 +125,6 @@ def compute_level_based_sl_tp(
         ]
         candidates.sort(key=lambda lvl: float(lvl["price_low"]))  # nearest first
     else:  # SELL
-        sl = float(level_a["price_high"]) + margin
         candidates = [
             lvl for lvl in active
             if lvl["kind"] == "support" and lvl.get("id") != level_a_id
@@ -102,14 +133,19 @@ def compute_level_based_sl_tp(
         ]
         candidates.sort(key=lambda lvl: -float(lvl["price_high"]))  # nearest first
 
-    sl_dist = abs(entry - sl)
+    # Signed distances: abs() used to hide an SL on the wrong side of entry
+    # (entry gapping through level A) and a TP on the wrong side (level B so
+    # close that B - margin lands behind entry) -- both then produced a
+    # positive, fake reward:risk.
+    sign = 1.0 if direction == "BUY" else -1.0
+    sl_dist = (entry - sl) * sign
     if sl_dist <= 0:
         return None
 
     best: tuple[dict, float, float] | None = None  # (level_b, tp, rr) -- nearest qualifying
     for cand in candidates:
         tp = float(cand["price_low"]) - margin if direction == "BUY" else float(cand["price_high"]) + margin
-        tp_dist = abs(tp - entry)
+        tp_dist = (tp - entry) * sign
         if tp_dist <= 0:
             continue
         rr = tp_dist / sl_dist

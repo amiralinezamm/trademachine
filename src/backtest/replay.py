@@ -62,6 +62,11 @@ def load_break_atr_mult() -> float:
         return float(yaml.safe_load(f)["levels"]["break_atr_mult"])
 
 
+def load_expiry_distance_atr_mult() -> float:
+    with open(PARAMS_PATH) as f:
+        return float(yaml.safe_load(f)["levels"]["expiry_distance_atr_mult"])
+
+
 # ---------------------------------------------------------------------------
 # Session detection (UTC hour → session name for fallback spread lookup)
 # ---------------------------------------------------------------------------
@@ -418,6 +423,50 @@ def _fetch_all_memory(conn, symbol: str, tf: str,
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
+def _fetch_all_news(conn, min_ts: datetime, max_ts: datetime) -> list[dict]:
+    """High/Medium news_events for the news-blackout gate. The live path
+    skips any signal inside a blackout window (main._check_signal_sync);
+    the backtest never applied it before, so it counted trades live would
+    never have sent. Note: news_events only exists from whenever the
+    ForexFactory ingest started -- earlier periods get no blackout (logged)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT title, impact, ts_utc FROM news_events
+            WHERE impact IN ('High', 'Medium') AND ts_utc >= %s AND ts_utc <= %s
+            ORDER BY ts_utc
+            """,
+            (min_ts, max_ts),
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+_CANDIDATE_COLS = (
+    "run_tag", "ts_utc", "symbol", "tf", "direction", "entry", "atr", "level_id",
+    "level_strength", "strength_median", "structure", "regime", "votes", "net_votes",
+    "gate", "exit_mode", "stop_loss", "take_profit", "rr", "outcome", "exit_price", "pnl_usd",
+    "risk_usd", "u_outcome", "u_pnl_usd",
+)
+
+
+def _insert_candidates(conn, rows: list[tuple]) -> None:
+    """Upsert into bt_candidates (017_bt_candidates.sql). Re-running the same
+    run_tag over the same range overwrites, never duplicates."""
+    if not rows:
+        return
+    import psycopg2.extras
+    cols = ", ".join(_CANDIDATE_COLS)
+    updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in _CANDIDATE_COLS[2:])
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            f"INSERT INTO bt_candidates ({cols}) VALUES %s "
+            f"ON CONFLICT (run_tag, ts_utc) DO UPDATE SET {updates}",
+            rows,
+        )
+
+
 def _fetch_all_divergence_events(conn, symbol: str, tf: str,
                                  min_ts=None, max_ts=None) -> list[dict]:
     """D20 -- divergence_events (SPEC.md 4.19), both kinds together --
@@ -527,6 +576,64 @@ def _level_state_at(
         return 0.0, "active", 0, 0
     e = entries[idx]
     return float(e["strength"]), str(e["status"]), int(e["touch_count"]), int(e["break_count"])
+
+
+def _any_zone_touched(levels: list[dict], high: float, low: float) -> bool:
+    """check_level_reversion can only fire on a zone this bar's wick entered
+    (low <= price_high and high >= price_low). Used as a cheap per-bar skip
+    before building the full live-equivalent level set."""
+    return any(low <= lvl["price_high"] and high >= lvl["price_low"] for lvl in levels)
+
+
+def _live_equivalent_levels(
+    levels_now: list[dict],
+    history_by_id: dict,
+    as_of_ts,
+    close: float,
+    atr: float,
+    expiry_dist_mult: float,
+    state_cache: dict | None = None,
+) -> list[dict]:
+    """The active/flipped level population the LIVE path would see at
+    as_of_ts (CLAUDE.md rule 6).
+
+    Live compute_levels() expires every level whose mid is farther than
+    levels.expiry_distance_atr_mult * ATR from the close, so live's
+    check_level_reversion (strength-median gate) and exit_rules (level-B
+    search) both work on exactly that set. The backtest previously passed
+    only levels within ±3xATR of the bar (a speed filter), which (a) judged
+    "stronger than median" against a different population than live and
+    (b) made any level B farther than ~3 ATR invisible to the TP search --
+    the main reason 96% of vote-passing candidates came back
+    "no_valid_sl_tp" in the 2026-09 HOLDOUT run."""
+    out = []
+    limit = expiry_dist_mult * atr
+    for lvl in levels_now:
+        mid = (lvl["price_low"] + lvl["price_high"]) / 2
+        if abs(close - mid) > limit:
+            continue
+        st = state_cache.get(lvl["id"]) if state_cache is not None else None
+        if st is None:
+            st = _level_state_at(history_by_id, lvl["id"], as_of_ts)
+            if state_cache is not None:
+                state_cache[lvl["id"]] = st
+        s, status, tc, bc = st
+        if status not in ("active", "flipped"):
+            continue
+        out.append({**lvl, "strength": s, "status": status,
+                    "touch_count": tc, "break_count": bc})
+    return out
+
+
+def _news_near(all_news, as_of_ts, window: timedelta = timedelta(hours=2)) -> list[dict]:
+    """High/Medium news within ±window of as_of_ts -- the same ±2h slice the
+    live path's _fetch_news_events_sync() hands to compute_blackout()."""
+    keys = getattr(all_news, "_ts_keys", None)
+    if keys is None:
+        keys = [r["ts_utc"] for r in all_news]
+    lo = bisect.bisect_left(keys, as_of_ts - window)
+    hi = bisect.bisect_right(keys, as_of_ts + window)
+    return all_news[lo:hi]
 
 
 def _open_gaps_at(all_gaps: list[dict], as_of_ts: datetime) -> list[dict]:
@@ -729,10 +836,24 @@ def run_backtest(
     min_net_votes_override: float | None = None,
     holdout_mode: bool = False,
     rule_version_suffix: str = "",
+    record_candidates: str | None = None,
 ) -> dict[str, Any]:
     """Run the replay backtest and write results to the signals table.
 
-    dry_run=True prints stats without writing to DB.
+    dry_run=True prints stats without writing to the signals table.
+
+    record_candidates: a run tag. When set, EVERY candidate that passes
+    check_level_reversion + the spacing filter is written to bt_candidates
+    with its full vote vector, the first gate that rejected it (blackout /
+    votes_rejected / no_valid_sl_tp / fired) and an evaluated outcome --
+    the real level-based exit when one exists, else a research-only
+    'shadow_min_rr' exit (same level-A stop, TP at exactly min_rr x risk).
+    Written even when dry_run=True (bt_candidates is research-only, never
+    read by the live path). This is what makes unbiased voter-weight
+    fitting and threshold sweeps possible: the signals table only ever holds
+    survivors. Spacing-filter state still follows only FIRED signals (live
+    semantics), so a sweep that fires more signals is a close, not exact,
+    approximation of re-running at that threshold.
 
     rule_version_suffix: appended to every written signal's rule_version
     (completes the config/costs.yaml backtest.rule_version_suffix knob that
@@ -798,8 +919,12 @@ def run_backtest(
     from src.engine.exit_rules import compute_level_based_sl_tp, load_exit_rules_params
     exit_rules_params = load_exit_rules_params()
 
+    from src.engine.exit_rules import shadow_min_rr_exit
+    from src.news.blackout import compute_blackout
+
     atr_period = load_atr_period()
     break_mult = load_break_atr_mult()
+    expiry_mult = load_expiry_distance_atr_mult()
     rule_params = load_rule_params()
     _min_spacing_usd = float(rule_params.get("min_same_direction_spacing_usd", 10.0))
     _last_by_dir: dict[str, dict] = {}  # {direction: {entry, outcome}} anti-lookahead
@@ -866,10 +991,15 @@ def run_backtest(
         # docstring -- was never fetched here at all, so this voter always
         # voted 0 in every backtest run to date, regardless of real data.
         all_memory = _PreIndexed(_fetch_all_memory(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts))
-        log.info("  levels=%d history_keys=%d regime=%d rounds=%d fib=%d pats=%d gaps=%d corr=%d matrix=%d rsi=%d div=%d dxy=%d memory=%d",
+        all_news = _PreIndexed(_fetch_all_news(conn, from_ts - timedelta(hours=3), to_ts + timedelta(hours=3)))
+        log.info("  levels=%d history_keys=%d regime=%d rounds=%d fib=%d pats=%d gaps=%d corr=%d matrix=%d rsi=%d div=%d dxy=%d memory=%d news=%d",
                  len(all_levels), len(history_by_id), len(all_regime), len(all_rounds),
                  len(all_fib), len(all_pats), len(all_gaps), len(all_corr),
-                 len(all_matrix), len(all_rsi), len(all_div), len(all_dxy), len(all_memory))
+                 len(all_matrix), len(all_rsi), len(all_div), len(all_dxy), len(all_memory),
+                 len(all_news))
+        if not all_news:
+            log.warning("  no news_events in range -- news-blackout gate cannot be applied "
+                        "(live would have suppressed some of these signals)")
 
         # Sort gap list (already ordered by ts_utc from query, but ensure)
         all_gaps.sort(key=lambda r: r["ts_utc"])
@@ -906,11 +1036,14 @@ def run_backtest(
             )
             _rule_status = {row[0]: row[1] for row in _cur.fetchall()}
 
-        stats = {"total": 0, "signals": 0, "votes_rejected": 0, "no_valid_sl_tp": 0,
+        stats = {"total": 0, "signals": 0, "candidates": 0,
+                 "blackout": 0, "votes_rejected": 0, "no_valid_sl_tp": 0,
                  "tp": 0, "sl": 0, "level_invalidated": 0, "timeout": 0, "open": 0,
-                 "total_pnl": 0.0}
+                 "total_pnl": 0.0, "candidates_recorded": 0}
         BATCH = 200
         batch_signals = []
+        candidate_rows: list[tuple] = []
+        _min_net_votes = _voting_params.get("min_net_votes", 2)
 
         for i in range(atr_period, len(candles) - 1):
             atr = atr_arr[i]
@@ -930,44 +1063,57 @@ def run_backtest(
             levels_now = _levels_at(all_levels, ts)
             # Apply point-in-time strength/status from levels_history.
             # Levels with no history entry yet (freshly created, no touches)
-            # default to (0.0, "active") — filter to active/flipped only.
-            # Price pre-filter: skip levels >3×ATR from current bar's range
-            # (check_level_reversion requires wick to touch zone; levels this
-            # far away are guaranteed misses — avoids 9.7M _level_state_at
-            # calls for irrelevant levels in walk-forward folds).
+            # default to (0.0, "active") -- filter to active/flipped only.
+            # Stage 1 (speed): only levels within ±3xATR of this bar can have
+            # been touched by its wick; no touch -> no signal possible.
             _atr_f = float(atr) if float(atr) > 0 else 1.0
             _price_lo = low  - 3.0 * _atr_f
             _price_hi = high + 3.0 * _atr_f
-            pit_levels = []
+            _state_cache: dict = {}
+            near_levels = []
             for lvl in levels_now:
-                if lvl["price_high"] < _price_lo:
+                if lvl["price_high"] < _price_lo or lvl["price_low"] > _price_hi:
                     continue
-                if lvl["price_low"] > _price_hi:
-                    continue
-                s, status, tc, bc = _level_state_at(history_by_id, lvl["id"], ts)
+                st = _level_state_at(history_by_id, lvl["id"], ts)
+                _state_cache[lvl["id"]] = st
+                s, status, tc, bc = st
                 if status not in ("active", "flipped"):
                     continue
-                pit_levels.append({**lvl, "strength": s, "status": status,
-                                   "touch_count": tc, "break_count": bc})
-            if not pit_levels:
+                near_levels.append({**lvl, "strength": s, "status": status,
+                                    "touch_count": tc, "break_count": bc})
+            if not _any_zone_touched(near_levels, high, low):
+                continue
+
+            # Stage 2 (parity): the population live actually sees. Both the
+            # strength-median gate and the level-B search must use it --
+            # see _live_equivalent_levels() docstring (CLAUDE.md rule 6).
+            live_levels = _live_equivalent_levels(
+                levels_now, history_by_id, ts, close, _atr_f, expiry_mult, _state_cache,
+            )
+            if not live_levels:
                 continue
             _structure = structure_from_swings(_h1_swings, ts, close)["structure"]
             signal = check_level_reversion(
                 symbol=symbol, tf=tf, ts_utc=ts,
                 high=high, low=low,
-                close=close, atr=float(atr), levels=pit_levels,
+                close=close, atr=float(atr), levels=live_levels,
                 params=rule_params, structure=_structure,
             )
             if signal is None:
                 continue
 
-            # same-direction spacing filter — use NEXT bar's open (actual replay entry)
+            # same-direction spacing filter -- use NEXT bar's open (actual replay entry)
             next_c = candles[i + 1]
             entry = float(next_c["open"])
             _prev = _last_by_dir.get(signal["direction"])
             signal = apply_spacing_filter(signal, entry, _prev, _min_spacing_usd)
             if signal is None:
                 continue
+            stats["candidates"] += 1
+
+            # News blackout (SPEC.md 4.7-a) -- live suppresses these; the
+            # backtest never did. Evaluated first, same order as live.
+            in_blackout = compute_blackout(ts, _news_near(all_news, ts))["blackout"]
 
             ctx = _make_context(
                 all_regime, all_rounds, all_fib, all_pats, all_gaps, all_corr,
@@ -981,21 +1127,17 @@ def run_backtest(
             signal["components"].update(ctx)
             signal["components"]["market_structure"] = _structure
 
-            # module_voting_v1: aggregate per-module votes; suppress if below threshold.
             _vote_result = compute_votes(
                 signal["components"], signal["direction"], _voting_params,
                 rule_status=_rule_status, allow_proposed=_allow_proposed,
             )
+            net_votes = _vote_result["net_votes"]
             signal["components"]["votes"] = _vote_result["votes"]
-            signal["components"]["net_votes"] = _vote_result["net_votes"]
+            signal["components"]["net_votes"] = net_votes
             signal["components"]["proposed_observations"] = _vote_result["proposed_observations"]
-            if _vote_result["net_votes"] < _voting_params.get("min_net_votes", 2):
-                stats["votes_rejected"] += 1
-                continue
 
-            # Entry already set above (dام #4: open of the NEXT bar)
-            cost = total_cost(c.get("spread"), ts, in_news_window=False, costs=costs)
-
+            # Entry already set above (trap #4: open of the NEXT bar)
+            cost = total_cost(c.get("spread"), ts, in_news_window=in_blackout, costs=costs)
             direction = signal["direction"]
             level_lo = float(signal["components"].get("level_price_low", 0))
             level_hi = float(signal["components"].get("level_price_high", 0))
@@ -1006,22 +1148,77 @@ def run_backtest(
                 "strength": signal["components"].get("level_strength", 0),
             }
             _exit = compute_level_based_sl_tp(
-                direction, level_a, entry, float(atr), pit_levels,
-                _vote_result["net_votes"], exit_rules_params,
+                direction, level_a, entry, float(atr), live_levels,
+                net_votes, exit_rules_params,
             )
-            if _exit is None:
-                stats["no_valid_sl_tp"] += 1
+
+            if in_blackout:
+                gate = "blackout"
+            elif net_votes < _min_net_votes:
+                gate = "votes_rejected"
+            elif _exit is None:
+                gate = "no_valid_sl_tp"
+            else:
+                gate = "fired"
+
+            # Evaluate an outcome whenever it's needed: always for a fired
+            # signal, and for every candidate when recording (shadow exit for
+            # candidates with no qualifying level B).
+            outcome = exit_price = pnl = None
+            exit_mode = sl = tp = rr = None
+            if gate == "fired" or record_candidates is not None:
+                if _exit is not None:
+                    exit_mode, ex = "level", _exit
+                else:
+                    exit_mode = "shadow_min_rr"
+                    ex = shadow_min_rr_exit(direction, level_a, entry, float(atr), exit_rules_params)
+                if ex is not None:
+                    sl, tp, rr = ex["stop_loss"], ex["take_profit"], ex["rr"]
+                    outcome, exit_price = _determine_outcome(
+                        candles, atr_arr, i + 1, entry, direction, sl, tp,
+                        max_safety_bars, level_lo, level_hi, break_mult,
+                    )
+                    pnl = _pnl(direction, entry, exit_price, cost)
+                else:
+                    exit_mode = None
+
+            if record_candidates is not None:
+                # Uniform exit for fair voter comparison (see 017 migration).
+                u_outcome = u_pnl = risk = None
+                if exit_mode == "shadow_min_rr":
+                    u_outcome, u_pnl = outcome, pnl
+                    risk = abs(entry - sl)
+                else:
+                    ux = shadow_min_rr_exit(direction, level_a, entry, float(atr), exit_rules_params)
+                    if ux is not None:
+                        u_outcome, u_exit = _determine_outcome(
+                            candles, atr_arr, i + 1, entry, direction,
+                            ux["stop_loss"], ux["take_profit"],
+                            max_safety_bars, level_lo, level_hi, break_mult,
+                        )
+                        u_pnl = _pnl(direction, entry, u_exit, cost)
+                        risk = abs(entry - ux["stop_loss"])
+                candidate_rows.append((
+                    record_candidates, ts, symbol, tf, direction, entry, float(atr),
+                    level_a["id"], signal["components"].get("level_strength"),
+                    signal["components"].get("strength_median_at_signal"),
+                    _structure, ctx.get("regime"),
+                    json.dumps(_vote_result["votes"]), net_votes,
+                    gate, exit_mode, sl, tp, rr, outcome, exit_price, pnl,
+                    risk, u_outcome, u_pnl,
+                ))
+                if len(candidate_rows) >= BATCH:
+                    _insert_candidates(conn, candidate_rows)
+                    conn.commit()
+                    stats["candidates_recorded"] += len(candidate_rows)
+                    candidate_rows = []
+
+            if gate != "fired":
+                stats[gate] += 1
                 continue
-            sl, tp = _exit["stop_loss"], _exit["take_profit"]
+
             signal["components"]["sl_tp"] = _exit
-
-            outcome, exit_price = _determine_outcome(
-                candles, atr_arr, i + 1, entry, direction, sl, tp,
-                max_safety_bars, level_lo, level_hi, break_mult,
-            )
-            pnl = _pnl(direction, entry, exit_price, cost)
             stats["total_pnl"] += pnl
-
             signal["entry"] = entry
             if rule_version_suffix:
                 signal["rule_version"] = signal["rule_version"] + rule_version_suffix
@@ -1041,12 +1238,24 @@ def run_backtest(
             for args in batch_signals:
                 _upsert_signal(conn, *args)
             conn.commit()
+        if candidate_rows:
+            _insert_candidates(conn, candidate_rows)
+            conn.commit()
+            stats["candidates_recorded"] += len(candidate_rows)
 
+        log.info(
+            "Funnel: candidates=%d -> blackout=%d votes_rejected=%d no_valid_sl_tp=%d fired=%d",
+            stats["candidates"], stats["blackout"], stats["votes_rejected"],
+            stats["no_valid_sl_tp"], stats["signals"],
+        )
         log.info(
             "Done. signals=%d tp=%d sl=%d level_invalidated=%d timeout=%d open=%d",
             stats["signals"], stats["tp"], stats["sl"],
             stats["level_invalidated"], stats["timeout"], stats["open"],
         )
+        if record_candidates is not None:
+            log.info("Recorded %d candidates to bt_candidates (run_tag=%s)",
+                     stats["candidates_recorded"], record_candidates)
         if stats["signals"] > 0:
             stats["winrate"] = stats["tp"] / stats["signals"]
             stats["expectancy"] = stats["total_pnl"] / stats["signals"]
@@ -1071,17 +1280,30 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
-    UTC = timezone.utc
-    if len(sys.argv) == 3:
-        from_ts = datetime.fromisoformat(sys.argv[1]).replace(tzinfo=UTC)
-        to_ts   = datetime.fromisoformat(sys.argv[2]).replace(tzinfo=UTC)
-    else:
-        # Full range: 2023-09-15 to today (quality-verified range from phase 0)
-        from_ts = datetime(2023, 9, 15, tzinfo=UTC)
-        to_ts   = datetime.now(UTC)
+    import argparse
 
-    dry = "--dry-run" in sys.argv
-    if dry:
-        log.info("DRY RUN — no DB writes")
-    result = run_backtest(from_ts, to_ts, dry_run=dry)
-    print(json.dumps(result, indent=2))
+    UTC = timezone.utc
+    # The old `len(sys.argv) == 3` check silently ignored the dates whenever
+    # --dry-run was also passed (argv length 4) and ran the full range.
+    ap = argparse.ArgumentParser(description="Replay backtest (SPEC.md 4.15)")
+    ap.add_argument("from_date", nargs="?", default="2023-09-15",
+                    help="ISO date, default 2023-09-15 (quality-verified range from phase 0)")
+    ap.add_argument("to_date", nargs="?", default=None, help="ISO date, default now")
+    ap.add_argument("--dry-run", action="store_true", help="don't write to the signals table")
+    ap.add_argument("--record-candidates", metavar="RUN_TAG", default=None,
+                    help="log every candidate + evaluated outcome to bt_candidates under this tag")
+    ap.add_argument("--rule-version-suffix", default="",
+                    help="suffix for written rule_version (use for any non-dry run overlapping live dates)")
+    args = ap.parse_args()
+
+    from_ts = datetime.fromisoformat(args.from_date).replace(tzinfo=UTC)
+    to_ts = (datetime.fromisoformat(args.to_date).replace(tzinfo=UTC)
+             if args.to_date else datetime.now(UTC))
+    if args.dry_run:
+        log.info("DRY RUN — no writes to the signals table")
+    result = run_backtest(
+        from_ts, to_ts, dry_run=args.dry_run,
+        record_candidates=args.record_candidates,
+        rule_version_suffix=args.rule_version_suffix,
+    )
+    print(json.dumps(result, indent=2, default=str))

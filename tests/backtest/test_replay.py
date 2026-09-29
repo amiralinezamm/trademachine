@@ -253,3 +253,49 @@ def test_make_context_memory_picks_latest_not_first():
     ]
     ctx = _make_context(**_empty_context_args(as_of), all_memory=rows)
     assert ctx["memory"]["up_ratio"] == 0.8  # the 2026-01-02 row, not 2026-01-01
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-29: live-parity level population + news window helpers
+# ---------------------------------------------------------------------------
+
+from datetime import timedelta  # noqa: E402
+
+from src.backtest.replay import _any_zone_touched, _live_equivalent_levels, _news_near  # noqa: E402
+
+
+def _lvl(id_, lo, hi):
+    return {"id": id_, "kind": "support", "price_low": lo, "price_high": hi,
+            "created_ts": datetime(2026, 1, 1, tzinfo=UTC)}
+
+
+def test_any_zone_touched():
+    levels = [_lvl(1, 100.0, 101.0)]
+    assert _any_zone_touched(levels, high=100.5, low=99.0) is True
+    assert _any_zone_touched(levels, high=99.9, low=98.0) is False
+
+
+def test_live_equivalent_levels_uses_expiry_distance_not_3atr():
+    """A level 6 ATR away is invisible to the old ±3xATR filter but is still
+    active in live (live only expires beyond expiry_distance_atr_mult=8)."""
+    ts = datetime(2026, 1, 2, tzinfo=UTC)
+    close, atr = 100.0, 1.0
+    near, six_atr, ten_atr = _lvl(1, 99.5, 100.5), _lvl(2, 105.5, 106.5), _lvl(3, 109.5, 110.5)
+    out = _live_equivalent_levels([near, six_atr, ten_atr], {}, ts, close, atr, 8.0)
+    assert {l["id"] for l in out} == {1, 2}
+    assert all(l["status"] == "active" for l in out)
+
+
+def test_live_equivalent_levels_drops_expired_and_uses_cache():
+    ts = datetime(2026, 1, 2, tzinfo=UTC)
+    cache = {1: (0.5, "expired", 3, 1), 2: (1.2, "flipped", 2, 1)}
+    out = _live_equivalent_levels([_lvl(1, 99.5, 100.5), _lvl(2, 100.5, 101.0)], {}, ts, 100.0, 1.0, 8.0, cache)
+    assert [l["id"] for l in out] == [2]
+    assert out[0]["strength"] == 1.2 and out[0]["status"] == "flipped"
+
+
+def test_news_near_is_plus_minus_two_hours():
+    base = datetime(2026, 1, 2, 12, tzinfo=UTC)
+    news = [{"title": t, "impact": "High", "ts_utc": base + timedelta(minutes=m)}
+            for t, m in (("early", -150), ("in_before", -100), ("in_after", 110), ("late", 125))]
+    assert [n["title"] for n in _news_near(news, base)] == ["in_before", "in_after"]
