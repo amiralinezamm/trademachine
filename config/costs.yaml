@@ -31,11 +31,10 @@ swap:
 commission: 0.0          # broker charges via spread only (confirmed by user)
 
 # ── Backtest execution parameters ──────────────────────────────────────────
-# IMPORTANT: sl_atr_mult and tp_atr_mult match the live n8n Telegram message
-# (SL = entry ± 2×ATR, TP = entry ± 3×ATR). Confirm before first run.
-# timeout_bars: ??? — SPEC does not specify. Must be confirmed by user.
+# sl_atr_mult/tp_atr_mult REMOVED 2026-09-29 -- SL/TP is level-to-level now
+# (config/params.yaml exit_rules:, src/engine/exit_rules.py), not a fixed
+# ATR multiple. Both live (src/api/main.py) and backtest (this file) call
+# the SAME exit_rules.compute_level_based_sl_tp (CLAUDE.md rule 6).
 backtest:
-  sl_atr_mult:    2.0    # SL = entry ± sl_atr_mult × ATR
-  tp_atr_mult:    3.0    # TP = entry ± tp_atr_mult × ATR
   # timeout_bars: not read by the code — exit uses max_safety_bars (default 288)
   rule_version_suffix: ""  # appended to rule_version for backtest runs; "" = same as live

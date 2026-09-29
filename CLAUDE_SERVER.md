@@ -25,7 +25,7 @@ ssh xauusd-bot "cd /opt/xauusd-bot && /opt/xauusd-bot/src/api/venv/bin/python /t
 ```
 /opt/xauusd-bot/
 ├── src/
-│   ├── api/main.py              # FastAPI — endpoints: /signal/latest /levels/near-price /gaps/open /news/upcoming /health
+│   ├── api/main.py              # FastAPI — endpoints: /signal/latest /signal/last /levels/near-price /gaps/open /news/upcoming /health
 │   ├── engine/
 │   │   ├── level_reversion.py  # check_level_reversion() — منطق اصلی سیگنال
 │   │   └── signal_store.py     # fetch_latest_closed_candle, fetch_active_levels
@@ -62,6 +62,7 @@ ssh xauusd-bot "cd /opt/xauusd-bot && /opt/xauusd-bot/src/api/venv/bin/python /t
 | gap_near_filter | testing — WR=63.3% وقتی gap باز < 5 ATR هست (فقط rules، بدون کد) |
 | double_touch_confidence_multiplier | proposed — هنوز کد اجرایی ندارد |
 | pressure_reversal | rejected |
+| matrix_score_mtf_agreement, rsi_overbought_oversold, rsi_price_divergence, macd_price_divergence, regime_quality, memory_pattern_bias, dollar_correlation_direction | **نامعلوم — احتمالاً بدون رکورد.** کد ۷ voter proposed کامل است ولی تابع ثبتشان (`register_proposed_rule(s)`) در هیچ مسیر اجرایی صدا زده نمی‌شد؛ یعنی احتمالاً هیچ‌کدام تا امروز واقعاً رأی نداده‌اند (D22، ۲۰۲۶-۰۹-۲۹). `python3 scripts/register_proposed_voters.py` را روی سرور اجرا کن تا وضعیت واقعی چاپ شود و رکوردها (idempotent) ساخته شوند.
 
 ## سرویس‌های systemd
 ```bash
@@ -99,3 +100,7 @@ b28854e docs: register double_touch_confidence_multiplier as proposed rule
 - اتصال DB از طریق get_connection() که .env را از root پروژه می‌خواند
 - replay کامل روی 212,972 کندل ≈ 6 ساعت طول می‌کشد
 - levels_history rebuild ≈ 15 دقیقه (scripts/rebuild_levels_history.py)
+- `/signal/latest` قانون را دوباره روی کندل جاری اجرا می‌کند و به محض ذخیره‌شدن سیگنال (یا رد شدنش) دیگر signal=None برمی‌گرداند — برای «نمایش آخرین سیگنال» (مثل /status ربات تلگرام) به‌جایش `/signal/last` را صدا بزن (فقط خواندن از جدول signals، بدون اجرای دوباره‌ی قانون؛ 2026-09-28)
+- **SL/TP سطح‌محور (2026-09-29، D23):** از این به بعد `stop_loss`/`take_profit` واقعاً در `signals` ذخیره می‌شوند (قبلاً همیشه NULL بودند، پیام n8n خودش با ضریب ثابت ATR حساب می‌کرد). منطق در `src/engine/exit_rules.py`، هم در `main.py` هم در `backtest/replay.py` صدا زده می‌شود. اگر هیچ سطح واجدشرایطی برای TP نباشد، سیگنال اصلاً صادر نمی‌شود (`reason: "no_valid_sl_tp"`) — یعنی بعد از دیپلوی این تغییر ممکن است تعداد سیگنال‌های زنده کمتر شود، این طبیعی است.
+- **توقف اجباری (2026-09-29، D23):** `/signal/latest` حالا فیلد `close_advisory` هم برمی‌گرداند — وقتی یک سیگنال باز، ساختار H1 برخلافش برگردد. n8n (`xauusd_signal_to_telegram.json`) پیام جدا برایش می‌فرستد. نیازمند migration `016_signals_reversal_alert.sql` (ستون `reversal_alert_sent`).
+- **قبل از ری‌استارت سرویس:** migration جدید `config/init-db/016_signals_reversal_alert.sql` باید روی دیتابیس اجرا شود (ستون `reversal_alert_sent` در `signals`)، وگرنه `fetch_open_signals`/`mark_reversal_alert_sent` روی ستون ناموجود خطا می‌دهند.

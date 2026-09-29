@@ -1,4 +1,4 @@
-from src.news.surprise import compute_surprise, load_event_map
+from src.news.surprise import compute_surprise, load_event_map, lookup_gold_sign
 
 EVENT_MAP = load_event_map()
 
@@ -62,11 +62,11 @@ def test_inverse_event_positive_gold_sign():
 
 
 def test_unmapped_event_reports_surprise_but_no_direction():
-    """An event not present in event_map.yaml (e.g. PPI, not covered by
-    SPEC.md's table) must not guess a direction — surprise is still computed,
-    but raw_direction/expected_dir stay None and `mapped` is False."""
+    """An event not present in event_map.yaml at all must not guess a
+    direction — surprise is still computed, but raw_direction/expected_dir
+    stay None and `mapped` is False."""
     result = compute_surprise(
-        event_title="PPI m/m",
+        event_title="Some Made-Up Indicator Nobody Tracks",
         actual=0.5,
         forecast=0.3,
         historical_surprises=[],
@@ -76,3 +76,49 @@ def test_unmapped_event_reports_surprise_but_no_direction():
     assert result["gold_sign"] is None
     assert result["raw_direction"] is None
     assert result["surprise"] == 0.5 - 0.3
+
+
+def test_ppi_now_mapped_from_2026_09_27_research():
+    """PPI m/m (USD) is in the 2026-09-27 research-backed event_map: higher
+    producer-price inflation -> Fed hawkish -> gold down (gold_sign -1)."""
+    result = compute_surprise(
+        event_title="PPI m/m", actual=0.5, forecast=0.3,
+        historical_surprises=[], event_map=EVENT_MAP,
+    )
+    assert result["mapped"] is True
+    assert result["gold_sign"] == -1
+    assert result["raw_direction"] == -1
+
+
+# ---------------------------------------------------------------------------
+# Cross-currency title collisions (2026-09-27 event_map rebuild) — the same
+# title means the OPPOSITE gold_sign for USD vs. EUR/GBP, so `country` must
+# disambiguate. Without it, an ambiguous title must resolve to None rather
+# than silently picking one currency's mapping.
+# ---------------------------------------------------------------------------
+
+def test_cpi_yy_usd_is_bearish_for_gold():
+    assert lookup_gold_sign("CPI y/y", EVENT_MAP, country="USD") == -1
+
+
+def test_cpi_yy_gbp_is_bullish_for_gold():
+    assert lookup_gold_sign("CPI y/y", EVENT_MAP, country="GBP") == 1
+
+
+def test_cpi_yy_without_country_is_ambiguous():
+    """USD says -1, GBP says +1 for the same title — without knowing the
+    currency, guessing either one would be wrong half the time."""
+    assert lookup_gold_sign("CPI y/y", EVENT_MAP, country=None) is None
+
+
+def test_compute_surprise_uses_country_to_disambiguate():
+    usd_result = compute_surprise(
+        event_title="CPI y/y", actual=3.5, forecast=3.2,
+        historical_surprises=[], event_map=EVENT_MAP, country="USD",
+    )
+    gbp_result = compute_surprise(
+        event_title="CPI y/y", actual=3.5, forecast=3.2,
+        historical_surprises=[], event_map=EVENT_MAP, country="GBP",
+    )
+    assert usd_result["raw_direction"] == -1
+    assert gbp_result["raw_direction"] == 1

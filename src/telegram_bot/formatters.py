@@ -12,12 +12,18 @@ DISCLAIMER = (
 
 
 def fmt_status(data: dict) -> str:
-    """Format /signal/latest response."""
+    """Format /signal/last (the latest STORED signal — see
+    src/engine/signal_store.py fetch_latest_signal for why this is a
+    separate endpoint from /signal/latest)."""
     sig = data.get("signal")
     if sig is None:
         reason = data.get("reason", "")
-        as_of = data.get("as_of", "")
-        return f"📭 سیگنال فعال: ندارد\n🕐 آخرین بررسی: {as_of}\nدلیل: {reason}{DISCLAIMER}"
+        as_of = data.get("as_of")
+        lines = ["📭 سیگنال فعال: ندارد"]
+        if as_of:
+            lines.append(f"🕐 آخرین بررسی: {as_of}")
+        lines.append(f"دلیل: {reason}")
+        return "\n".join(lines) + DISCLAIMER
 
     comp = sig.get("components", {})
     direction = sig.get("direction", "?")
@@ -39,6 +45,9 @@ def fmt_status(data: dict) -> str:
         f"💪 قدرت سطح: {strength_s}  |  ATR: {atr_s}",
         f"🕐 زمان: {ts}",
     ]
+    outcome = sig.get("outcome")
+    if outcome:
+        lines.append(f"🏁 نتیجه: {outcome}")
     return "\n".join(lines) + DISCLAIMER
 
 
@@ -89,17 +98,13 @@ def fmt_gaps(data: dict) -> str:
 
 
 def fmt_news(data: dict) -> str:
-    """Format /news/upcoming response."""
-    events = data.get("events", [])
-    if not events:
+    """Format /news/upcoming response. The backend (build_upcoming_digest,
+    src/news/news_reporter.py) already renders the full Telegram-HTML digest
+    — grouped by Jalali day, one disclaimer — so this is a thin pass-through.
+    Send with parse_mode="HTML" (see src/telegram_bot/bot.py cmd_news)."""
+    digest = data.get("digest")
+    if digest:
+        return digest
+    if not data.get("events"):
         return "📭 رویداد اقتصادی پیش‌رو: ندارد" + DISCLAIMER
-
-    lines = [f"📰 رویدادهای پیش‌رو ({data.get('count', len(events))} رویداد):"]
-    for ev in events[:8]:
-        msg = ev.get("message", "").strip()
-        if msg:
-            lines.append(msg)
-        else:
-            lines.append(f"  • {ev.get('title', '?')} — {ev.get('ts_utc', '')[:16]}")
-
-    return "\n".join(lines) + DISCLAIMER
+    return f"📰 رویدادهای پیش‌رو ({data.get('count', 0)} رویداد)" + DISCLAIMER

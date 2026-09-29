@@ -90,7 +90,7 @@
     {
       "parameters": {
         "chatId": "-1003415771278",
-        "text": "={{ $json.signal.direction === 'BUY' ? '🟢' : '🔴' }} XAUUSD@ | {{ $json.signal.direction === 'BUY' ? 'خرید (BUY)' : 'فروش (SELL)' }}\nقیمت ورود: {{ $json.signal.entry.toFixed(3) }}\nSL پیشنهادی: {{ ($json.signal.direction === 'BUY' ? ($json.signal.entry - 2 * $json.signal.components.atr) : ($json.signal.entry + 2 * $json.signal.components.atr)).toFixed(3) }} (−2×ATR)\nTP پیشنهادی: {{ ($json.signal.direction === 'BUY' ? ($json.signal.entry + 3 * $json.signal.components.atr) : ($json.signal.entry - 3 * $json.signal.components.atr)).toFixed(3) }} (+3×ATR)\nسطح برخوردی: {{ $json.signal.components.level_kind === 'support' ? 'حمایت' : 'مقاومت' }} [{{ $json.signal.components.level_price_low }} - {{ $json.signal.components.level_price_high }}]\nقدرت سطح: {{ $json.signal.components.level_strength.toFixed(3) }}\nفاصله تا سطح: {{ $json.signal.components.distance.toFixed(3) }} (ATR={{ $json.signal.components.atr.toFixed(3) }})\nقانون: {{ $json.signal.rule_version }} (status=testing، بک‌تست نشده)\nزمان (تهران): {{ $json.signal.ts_utc.toDateTime().setZone('Asia/Tehran').toFormat('yyyy-MM-dd HH:mm') }}",
+        "text": "={{ $json.signal.direction === 'BUY' ? '🟢' : '🔴' }} XAUUSD@ | {{ $json.signal.direction === 'BUY' ? 'خرید (BUY)' : 'فروش (SELL)' }}\nقیمت ورود: {{ $json.signal.entry.toFixed(3) }}\nSL (آن‌سوی سطح برخورد): {{ $json.signal.stop_loss.toFixed(3) }}\nTP (نزدیک سطح بعدی): {{ $json.signal.take_profit.toFixed(3) }}\nنسبت سود:ضرر: {{ $json.signal.components.sl_tp.rr.toFixed(2) }}:1{{ $json.signal.components.sl_tp.relaxed ? ' (زیر ۲:۱ — فقط چون اطمینان بالا بود)' : '' }}\nسطح برخوردی: {{ $json.signal.components.level_kind === 'support' ? 'حمایت' : 'مقاومت' }} [{{ $json.signal.components.level_price_low }} - {{ $json.signal.components.level_price_high }}]\nقدرت سطح: {{ $json.signal.components.level_strength.toFixed(3) }}\nفاصله تا سطح: {{ $json.signal.components.distance.toFixed(3) }} (ATR={{ $json.signal.components.atr.toFixed(3) }})\nقانون: {{ $json.signal.rule_version }} (status=testing، بک‌تست نشده)\nزمان (تهران): {{ $json.signal.ts_utc.toDateTime().setZone('Asia/Tehran').toFormat('yyyy-MM-dd HH:mm') }}",
         "additionalFields": {}
       },
       "id": "a1111111-0000-4000-8000-000000000004",
@@ -100,6 +100,60 @@
       "position": [
         320,
         -120
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "xauusdBotTelegramCred01",
+          "name": "XAUUSD Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c3333333-0000-4000-8000-000000000001",
+              "leftValue": "={{ $json.close_advisory }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1111111-0000-4000-8000-000000000005",
+      "name": "Reversal advisory?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        80,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "-1003415771278",
+        "text": "⚠️ توقف اجباری\n{{ $json.close_advisory.direction === 'BUY' ? '🟢 خرید' : '🔴 فروش' }} باز از {{ $json.close_advisory.ts_utc.toDateTime().setZone('Asia/Tehran').toFormat('yyyy-MM-dd HH:mm') }} (ورود {{ $json.close_advisory.entry.toFixed(3) }})\nساختار H1 برخلاف این پوزیشن برگشته ({{ $json.close_advisory.structure }}).\n{{ $json.close_advisory.message }}",
+        "additionalFields": {}
+      },
+      "id": "a1111111-0000-4000-8000-000000000006",
+      "name": "Send reversal advisory",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        320,
+        200
       ],
       "credentials": {
         "telegramApi": {
@@ -128,6 +182,11 @@
             "node": "Signal fired?",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Reversal advisory?",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -137,6 +196,18 @@
         [
           {
             "node": "Send Telegram message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Reversal advisory?": {
+      "main": [
+        [
+          {
+            "node": "Send reversal advisory",
             "type": "main",
             "index": 0
           }

@@ -5,6 +5,7 @@ python-dotenv>=1.0
 requests>=2.32
 psycopg2-binary>=2.9
 PyYAML>=6.0
+jdatetime>=4.1  # Jalali calendar for Telegram news digest headers (src/news/persian_calendar.py)
 pytest>=8.0
 pytest-asyncio>=0.24
 httpx2>=2.13  # needed by starlette.testclient.TestClient (tests/api/)

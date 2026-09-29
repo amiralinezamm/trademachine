@@ -40,8 +40,8 @@ def _get(path: str, **params) -> dict:
     return r.json()
 
 
-async def _reply(update: Update, text: str) -> None:
-    await update.message.reply_text(text, parse_mode=None)
+async def _reply(update: Update, text: str, parse_mode: str | None = None) -> None:
+    await update.message.reply_text(text, parse_mode=parse_mode)
 
 
 # ── command handlers ──────────────────────────────────────────────────────────
@@ -60,7 +60,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        data = _get("/signal/latest")
+        # /signal/last (not /signal/latest): the latter re-runs the rule
+        # against the current candle and stops returning a signal once it's
+        # already stored or price has moved past the level -- wrong for a
+        # "show me the last signal" command (see fetch_latest_signal()
+        # docstring in src/engine/signal_store.py).
+        data = _get("/signal/last")
         await _reply(update, fmt_status(data))
     except Exception as exc:
         log.exception("cmd_status error")
@@ -89,7 +94,8 @@ async def cmd_gaps(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         data = _get("/news/upcoming")
-        await _reply(update, fmt_news(data))
+        # digest is rendered with Telegram HTML (<b>, <blockquote>) server-side
+        await _reply(update, fmt_news(data), parse_mode="HTML")
     except Exception as exc:
         log.exception("cmd_news error")
         await _reply(update, f"❌ خطا در دریافت اخبار: {exc}")

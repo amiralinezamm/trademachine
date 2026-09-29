@@ -22,6 +22,57 @@ def test_status_no_signal():
     assert DISCLAIMER in msg
 
 
+def test_status_no_signal_without_as_of():
+    """/signal/last (unlike the old /signal/latest) never returns an
+    'as_of' field for the no-signal-stored case -- must not print a bare
+    'آخرین بررسی: ' line."""
+    data = {"signal": None, "reason": "no_signal_stored"}
+    msg = fmt_status(data)
+    assert "سیگنال فعال: ندارد" in msg
+    assert "no_signal_stored" in msg
+    assert "آخرین بررسی" not in msg
+    assert DISCLAIMER in msg
+
+
+def test_status_signal_shows_outcome_when_present():
+    data = {
+        "signal": {
+            "direction": "BUY",
+            "entry": 2350.5,
+            "ts_utc": "2026-09-19T10:05:00+00:00",
+            "outcome": "tp",
+            "components": {
+                "level_kind": "support",
+                "level_price_low": 2340.0,
+                "level_price_high": 2345.0,
+                "level_strength": 1.75,
+                "atr": 8.5,
+            },
+        }
+    }
+    msg = fmt_status(data)
+    assert "tp" in msg
+
+
+def test_status_signal_omits_outcome_line_when_absent():
+    data = {
+        "signal": {
+            "direction": "BUY",
+            "entry": 2350.5,
+            "ts_utc": "2026-09-19T10:05:00+00:00",
+            "components": {
+                "level_kind": "support",
+                "level_price_low": 2340.0,
+                "level_price_high": 2345.0,
+                "level_strength": 1.75,
+                "atr": 8.5,
+            },
+        }
+    }
+    msg = fmt_status(data)
+    assert "نتیجه" not in msg
+
+
 def test_status_buy_signal():
     data = {
         "signal": {
@@ -212,30 +263,16 @@ def test_news_empty():
     assert DISCLAIMER in msg
 
 
-def test_news_with_message_field():
-    events = [
-        {
-            "title": "NFP",
-            "ts_utc": "2026-09-19T12:30:00",
-            "impact": "High",
-            "message": "📌 NFP — High | 12:30 UTC | طلا: صعود",
-        },
-        {
-            "title": "CPI",
-            "ts_utc": "2026-09-20T08:00:00",
-            "impact": "High",
-            "message": "📌 CPI — High | 08:00 UTC | طلا: نامشخص",
-        },
-    ]
-    msg = fmt_news({"events": events, "count": 2})
-    assert "NFP" in msg
-    assert "CPI" in msg
-    assert "رویدادهای پیش‌رو" in msg
-    assert DISCLAIMER in msg
+def test_news_uses_digest_field_verbatim():
+    """digest is fully rendered server-side (build_upcoming_digest) — fmt_news
+    is just a pass-through so the Telegram HTML tags survive untouched."""
+    digest = "🗞 <b>رویدادهای اقتصادی پیش‌رو</b>\n\n<blockquote>NFP</blockquote>"
+    msg = fmt_news({"events": [{"title": "NFP"}], "count": 1, "digest": digest})
+    assert msg == digest
 
 
-def test_news_without_message_field():
+def test_news_no_digest_falls_back_to_count_summary():
     events = [{"title": "FOMC", "ts_utc": "2026-09-19T18:00:00"}]
     msg = fmt_news({"events": events, "count": 1})
-    assert "FOMC" in msg
+    assert "1" in msg
     assert DISCLAIMER in msg

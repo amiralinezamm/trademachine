@@ -10,8 +10,11 @@ kept separate so the core logic stays testable.
 """
 from __future__ import annotations
 
+import html
 from datetime import datetime, timezone
 from typing import Any
+
+from src.news.persian_calendar import jalali_day_header_fa, tehran_calendar_day_key
 
 DIRECTION_LABEL = {1: "صعودی ↑", -1: "نزولی ↓", 0: "بدون جهت", None: "نامشخص"}
 
@@ -105,6 +108,57 @@ def build_upcoming_message(event: dict[str, Any], surprise_result: dict[str, Any
 
     lines.append("⚠️ سیگنال‌های آزمایشی — مسئولیت با شماست")
     return "\n".join(lines)
+
+
+def _upcoming_event_block(event: dict[str, Any], surprise_result: dict[str, Any]) -> str:
+    """One event, formatted as a Telegram HTML blockquote — no per-event
+    disclaimer (that's added once by build_upcoming_digest)."""
+    impact_emoji = "🔴" if event.get("impact") == "High" else "🟠"
+    title = html.escape(str(event.get("title", "رویداد")))
+    ts_tehran = _to_tehran_hhmm(event["ts_utc"])
+    forecast = html.escape(str(event.get("forecast") or "—"))
+    previous = html.escape(str(event.get("previous") or "—"))
+
+    lines = [f"{impact_emoji} <b>{title}</b> ({event.get('country', '')})"]
+    lines.append(f"ساعت {ts_tehran}")
+    lines.append(f"انتظار: {forecast}  |  قبلی: {previous}")
+
+    gold_sign = surprise_result.get("gold_sign")
+    if gold_sign is not None:
+        lines.append(f"در صورت بالاتر از انتظار: {DIRECTION_LABEL.get(gold_sign, '—')}")
+    else:
+        lines.append("جهت: هنوز در نقشه ثبت نشده")
+
+    return "<blockquote>" + "\n".join(lines) + "</blockquote>"
+
+
+def build_upcoming_digest(
+    events: list[dict[str, Any]],
+    header: str = "🗞 <b>رویدادهای اقتصادی پیش‌رو</b>",
+) -> str:
+    """Groups upcoming events by Tehran-local calendar day (Jalali) into one
+    Telegram HTML message — one disclaimer at the end, not one per event.
+
+    Each item in `events` must be {"event": {...same shape as
+    build_upcoming_message's `event`...}, "surprise_result": {...}}.
+    """
+    disclaimer = "⚠️ سیگنال‌های آزمایشی — مسئولیت با شماست"
+    if not events:
+        return f"{header}\n\nرویداد اقتصادی پیش‌رویی ثبت نشده.\n\n{disclaimer}"
+
+    blocks: list[str] = [header]
+    current_day: Any = None
+    for item in events:
+        event = item["event"]
+        day_key = tehran_calendar_day_key(event["ts_utc"])
+        if day_key != current_day:
+            current_day = day_key
+            day_header = jalali_day_header_fa(event["ts_utc"])
+            blocks.append(f"\n<b>{day_header}</b>\n――――――――――――")
+        blocks.append(_upcoming_event_block(event, item["surprise_result"]))
+
+    blocks.append(f"\n{disclaimer}")
+    return "\n".join(blocks)
 
 
 def _to_tehran_hhmm(dt: datetime) -> str:

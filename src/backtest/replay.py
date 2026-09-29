@@ -732,9 +732,13 @@ def run_backtest(
 
     costs = load_costs()
     bt_cfg = costs.get("backtest", {})
-    sl_mult = float(bt_cfg.get("sl_atr_mult", 2.0))
-    tp_mult = float(bt_cfg.get("tp_atr_mult", 3.0))
     max_safety_bars = int(bt_cfg.get("max_safety_bars", 288))
+
+    # 2026-09-29: level-to-level SL/TP replaces the old fixed ATR-multiple
+    # exit (costs.yaml no longer has sl_atr_mult/tp_atr_mult). ONE function,
+    # same one src/api/main.py's live path calls (CLAUDE.md rule 6).
+    from src.engine.exit_rules import compute_level_based_sl_tp, load_exit_rules_params
+    exit_rules_params = load_exit_rules_params()
 
     atr_period = load_atr_period()
     break_mult = load_break_atr_mult()
@@ -823,7 +827,7 @@ def run_backtest(
             )
             _rule_status = {row[0]: row[1] for row in _cur.fetchall()}
 
-        stats = {"total": 0, "signals": 0, "votes_rejected": 0,
+        stats = {"total": 0, "signals": 0, "votes_rejected": 0, "no_valid_sl_tp": 0,
                  "tp": 0, "sl": 0, "level_invalidated": 0, "timeout": 0, "open": 0,
                  "total_pnl": 0.0}
         BATCH = 200
@@ -913,15 +917,24 @@ def run_backtest(
             cost = total_cost(c.get("spread"), ts, in_news_window=False, costs=costs)
 
             direction = signal["direction"]
-            if direction == "BUY":
-                sl = entry - sl_mult * float(atr)
-                tp = entry + tp_mult * float(atr)
-            else:
-                sl = entry + sl_mult * float(atr)
-                tp = entry - tp_mult * float(atr)
-
             level_lo = float(signal["components"].get("level_price_low", 0))
             level_hi = float(signal["components"].get("level_price_high", 0))
+            level_a = {
+                "id": signal["components"].get("level_id"),
+                "price_low": level_lo,
+                "price_high": level_hi,
+                "strength": signal["components"].get("level_strength", 0),
+            }
+            _exit = compute_level_based_sl_tp(
+                direction, level_a, entry, float(atr), pit_levels,
+                _vote_result["net_votes"], exit_rules_params,
+            )
+            if _exit is None:
+                stats["no_valid_sl_tp"] += 1
+                continue
+            sl, tp = _exit["stop_loss"], _exit["take_profit"]
+            signal["components"]["sl_tp"] = _exit
+
             outcome, exit_price = _determine_outcome(
                 candles, atr_arr, i + 1, entry, direction, sl, tp,
                 max_safety_bars, level_lo, level_hi, break_mult,

@@ -214,3 +214,43 @@ def store_pressure_reversal_backtest(conn, bt: dict[str, Any]) -> None:
                 None,
             ),
         )
+
+
+# --- 4.8-a: dollar_correlation_direction voter ------------------------------
+
+def register_dollar_correlation_direction_rule(conn, params: dict[str, Any]) -> None:
+    """rules registry (SPEC.md 4.16): dollar_correlation_direction starts
+    status='proposed'. Idempotent -- DO NOTHING on conflict, same
+    convention as matrix_store.register_proposed_rule /
+    rsi_store.register_proposed_rules / regime_store.register_proposed_rule
+    / memory_store.register_proposed_rule.
+
+    Unlike oil_shock_divergence / pressure_reversal above (4.8-b/c, which
+    reach verified/rejected via their own backtest functions), this is the
+    plain 4.8-a rolling-correlation voter. SPEC.md's decision table has no
+    D-entry naming it -- D20 lists six voters and this is a later,
+    undocumented seventh (module_voting.py's own PROPOSED_VOTE_FUNCTIONS
+    dict and tests/engine/test_d21_voters.py both assume a "D21" that isn't
+    in SPEC.md). Flagging here rather than inventing one; SPEC.md should
+    get its own D-entry for this decision."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO rules (id, statement, origin, status, params, created_at)
+            VALUES (%s, %s, %s, 'proposed', %s, NOW())
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (
+                "dollar_correlation_direction",
+                "SPEC.md 4.8-a: when |dollar_corr| >= dollar_corr_min_abs, implied "
+                "gold direction is DXY's own M5 direction with its sign flipped by "
+                "the correlation's sign (inverse in the normal negative-correlation "
+                "case, same-direction in the unusual positive-correlation case).",
+                "SPEC.md 4.8-a; voter wiring has no D-entry in SPEC.md's decision table",
+                psycopg2.extras.Json({
+                    "dollar_corr_window": params["dollar_corr_window"],
+                    "dxy_direction_bars": params["dxy_direction_bars"],
+                    "dollar_corr_min_abs": params["dollar_corr_min_abs"],
+                }),
+            ),
+        )
