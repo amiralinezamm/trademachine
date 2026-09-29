@@ -39,6 +39,42 @@ def load_event_map(event_map_path: Path = EVENT_MAP_PATH) -> dict[str, dict[str,
     return lookup
 
 
+def load_event_meta_map(event_map_path: Path = EVENT_MAP_PATH) -> dict[str, dict[str, dict]]:
+    """Returns {alias_lowercased: {country_upper: {tier, usd_range, pct_range}}}.
+
+    Companion to load_event_map() (2026-09-29): same keying by (alias,
+    country) for the same reason (a title's magnitude differs by currency
+    too, not just its gold_sign), but carries the expected-move metadata
+    from config/event_map.yaml instead of gold_sign, so the digest can show
+    "شدت حرکت" without guessing a number that isn't in the researched table."""
+    with open(event_map_path) as f:
+        data = yaml.safe_load(f)
+    lookup: dict[str, dict[str, dict]] = {}
+    for entry in data["events"]:
+        country = entry["country"].strip().upper()
+        meta = {
+            "tier": entry.get("tier"),
+            "usd_range": entry.get("usd_range"),
+            "pct_range": entry.get("pct_range"),
+        }
+        for alias in entry["aliases"]:
+            lookup.setdefault(alias.strip().lower(), {})[country] = meta
+    return lookup
+
+
+def lookup_event_meta(
+    event_title: str, meta_map: dict[str, dict[str, dict]], country: str
+) -> dict | None:
+    """country is required here (unlike lookup_gold_sign) -- every call site
+    already has it from the news_events row, and magnitude varies by
+    currency just as much as direction does, so there's no legitimate
+    country-less caller to support."""
+    candidates = meta_map.get(event_title.strip().lower())
+    if not candidates:
+        return None
+    return candidates.get(country.strip().upper())
+
+
 def lookup_gold_sign(
     event_title: str, event_map: dict[str, dict[str, int]], country: str | None = None
 ) -> int | None:

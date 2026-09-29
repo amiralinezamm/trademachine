@@ -153,7 +153,7 @@ def _fetch_events_with_surprise(where_sql: str, params: tuple, limit: int = 40) 
     """
     import datetime as _dt
     from src.news.fetch_calendar import get_connection
-    from src.news.surprise import load_event_map, lookup_gold_sign
+    from src.news.surprise import load_event_map, load_event_meta_map, lookup_event_meta, lookup_gold_sign
 
     conn = get_connection()
     try:
@@ -173,6 +173,7 @@ def _fetch_events_with_surprise(where_sql: str, params: tuple, limit: int = 40) 
         conn.close()
 
     event_map = load_event_map()
+    meta_map = load_event_meta_map()
     out = []
     for title, country, impact, ts_utc, forecast, previous in rows:
         if ts_utc.tzinfo is None:
@@ -189,6 +190,7 @@ def _fetch_events_with_surprise(where_sql: str, params: tuple, limit: int = 40) 
         out.append({
             "event": event,
             "surprise_result": {"gold_sign": gold_sign, "mapped": gold_sign is not None},
+            "meta": lookup_event_meta(title, meta_map, country=country),
         })
     return out
 

@@ -325,3 +325,36 @@ def test_digest_wraps_events_in_blockquote():
     items = [{"event": _event(), "surprise_result": {"gold_sign": -1, "mapped": True}}]
     msg = build_upcoming_digest(items)
     assert "<blockquote>" in msg and "</blockquote>" in msg
+
+
+def test_digest_direction_line_frames_it_as_a_prediction():
+    """2026-09-29 wording change: lead with 'پیش‌بینی', not a bare
+    'در صورت بالاتر از انتظار' clause."""
+    items = [{"event": _event(), "surprise_result": {"gold_sign": -1, "mapped": True}}]
+    msg = build_upcoming_digest(items)
+    assert "پیش‌بینی" in msg
+    assert "نزولی" in msg
+
+
+def test_digest_shows_intensity_when_meta_present():
+    items = [{
+        "event": _event(),
+        "surprise_result": {"gold_sign": -1, "mapped": True},
+        "meta": {"tier": 5, "usd_range": "40 – 110 $", "pct_range": "0.9 – 2.5 %"},
+    }]
+    msg = build_upcoming_digest(items)
+    assert "شدت حرکت" in msg
+    assert "40 – 110 $" in msg
+    assert "0.9 – 2.5 %" in msg
+
+
+def test_digest_omits_intensity_when_meta_absent():
+    items = [{"event": _event(), "surprise_result": {"gold_sign": -1, "mapped": True}}]
+    msg = build_upcoming_digest(items)
+    assert "شدت حرکت" not in msg
+
+
+def test_digest_omits_intensity_when_meta_is_none_explicitly():
+    items = [{"event": _event(), "surprise_result": {"gold_sign": -1, "mapped": True}, "meta": None}]
+    msg = build_upcoming_digest(items)
+    assert "شدت حرکت" not in msg

@@ -110,9 +110,17 @@ def build_upcoming_message(event: dict[str, Any], surprise_result: dict[str, Any
     return "\n".join(lines)
 
 
-def _upcoming_event_block(event: dict[str, Any], surprise_result: dict[str, Any]) -> str:
+def _upcoming_event_block(
+    event: dict[str, Any], surprise_result: dict[str, Any], meta: dict[str, Any] | None = None,
+) -> str:
     """One event, formatted as a Telegram HTML blockquote — no per-event
-    disclaimer (that's added once by build_upcoming_digest)."""
+    disclaimer (that's added once by build_upcoming_digest).
+
+    `meta`: {"tier", "usd_range", "pct_range"} from
+    surprise.lookup_event_meta() — the expected-move magnitude from the
+    user's own researched table (config/event_map.yaml), not a guess.
+    None when the event isn't in the map (same as surprise_result's
+    gold_sign being None) — the intensity line is simply omitted then."""
     impact_emoji = "🔴" if event.get("impact") == "High" else "🟠"
     title = html.escape(str(event.get("title", "رویداد")))
     ts_tehran = _to_tehran_hhmm(event["ts_utc"])
@@ -125,9 +133,14 @@ def _upcoming_event_block(event: dict[str, Any], surprise_result: dict[str, Any]
 
     gold_sign = surprise_result.get("gold_sign")
     if gold_sign is not None:
-        lines.append(f"در صورت بالاتر از انتظار: {DIRECTION_LABEL.get(gold_sign, '—')}")
+        direction = DIRECTION_LABEL.get(gold_sign, "—")
+        lines.append(f"پیش‌بینی: اگر عدد بالاتر از انتظار منتشر شود، طلا {direction}")
     else:
         lines.append("جهت: هنوز در نقشه ثبت نشده")
+
+    if meta and meta.get("usd_range"):
+        pct = f" ({meta['pct_range']})" if meta.get("pct_range") else ""
+        lines.append(f"شدت حرکت پیش‌بینی‌شده: {meta['usd_range']}{pct}")
 
     return "<blockquote>" + "\n".join(lines) + "</blockquote>"
 
@@ -155,7 +168,7 @@ def build_upcoming_digest(
             current_day = day_key
             day_header = jalali_day_header_fa(event["ts_utc"])
             blocks.append(f"\n<b>{day_header}</b>\n――――――――――――")
-        blocks.append(_upcoming_event_block(event, item["surprise_result"]))
+        blocks.append(_upcoming_event_block(event, item["surprise_result"], item.get("meta")))
 
     blocks.append(f"\n{disclaimer}")
     return "\n".join(blocks)

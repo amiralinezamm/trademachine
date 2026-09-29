@@ -1,6 +1,13 @@
-from src.news.surprise import compute_surprise, load_event_map, lookup_gold_sign
+from src.news.surprise import (
+    compute_surprise,
+    load_event_map,
+    load_event_meta_map,
+    lookup_event_meta,
+    lookup_gold_sign,
+)
 
 EVENT_MAP = load_event_map()
+EVENT_META_MAP = load_event_meta_map()
 
 
 def test_raw_direction_for_negative_gold_sign_event_below_min_samples():
@@ -122,3 +129,27 @@ def test_compute_surprise_uses_country_to_disambiguate():
     )
     assert usd_result["raw_direction"] == -1
     assert gbp_result["raw_direction"] == 1
+
+
+# ---------------------------------------------------------------------------
+# load_event_meta_map / lookup_event_meta (2026-09-29: "شدت حرکت" in the digest)
+# ---------------------------------------------------------------------------
+
+def test_lookup_event_meta_returns_tier_and_ranges():
+    meta = lookup_event_meta("Non-Farm Employment Change", EVENT_META_MAP, country="USD")
+    assert meta is not None
+    assert meta["tier"] == 5
+    assert meta["usd_range"]
+    assert meta["pct_range"]
+
+
+def test_lookup_event_meta_differs_by_country_like_gold_sign_does():
+    usd_meta = lookup_event_meta("CPI y/y", EVENT_META_MAP, country="USD")
+    gbp_meta = lookup_event_meta("CPI y/y", EVENT_META_MAP, country="GBP")
+    assert usd_meta is not None and gbp_meta is not None
+    assert usd_meta["tier"] != gbp_meta["tier"] or usd_meta["usd_range"] != gbp_meta["usd_range"]
+
+
+def test_lookup_event_meta_unmapped_event_returns_none():
+    meta = lookup_event_meta("Some Made-Up Indicator Nobody Tracks", EVENT_META_MAP, country="USD")
+    assert meta is None
