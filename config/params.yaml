@@ -228,6 +228,32 @@ signal_rules:
     min_touches: 2             # minimum qualifying touches in window
     multiplier: 1.3            # base confidence multiplier (sweep range: 1.1–1.5)
 
+# 2026-09-29 decision — replaces the fixed ATR-multiple SL/TP (old
+# costs.yaml backtest.sl_atr_mult/tp_atr_mult) with level-to-level exits.
+# src/engine/exit_rules.py is the ONE function both live (src/api/main.py)
+# and backtest (src/backtest/replay.py) call (CLAUDE.md rule 6).
+exit_rules:
+  # SL = beyond level A (the touched/reversed-from level) by this many ATR.
+  # TP = short of level B (the next qualifying level ahead) by the same
+  # margin. User-specified 2026-09-29.
+  sl_tp_margin_atr_mult: 0.25
+  # Target minimum reward:risk. Candidates are searched nearest-first;
+  # the first that reaches this wins. User-specified 2026-09-29 ("حداقل
+  # نسبت ۲ به ۱", up to 10:1 also fine — no ceiling enforced, the nearest
+  # level that clears the floor wins rather than searching for the
+  # single best ratio available).
+  min_rr: 2.0
+  # DESIGN DECISION: when no candidate level reaches min_rr, the nearest
+  # qualifying one is still used if net_votes (module_voting's existing
+  # weighted vote sum, not a new confidence metric) is at least this high
+  # -- AND the resulting reward:risk is still >= 1.0 (hardcoded invariant,
+  # see exit_rules.ABSOLUTE_MIN_RR -- "SL must never exceed TP" is not a
+  # sweep parameter). Not spec'd; a round number twice the current
+  # module_voting.min_net_votes gate (2) as a starting point -- sweep
+  # candidate for the real backtest, same convention as every other
+  # DESIGN DECISION value in this file.
+  high_confidence_net_votes: 4.0
+
 round_numbers:
   # SPEC.md 4.4. Psychological price levels and their dual effect.
   # Two behaviors: REVERSAL (profit-taking walls) and ACCELERATION (stop cascade).

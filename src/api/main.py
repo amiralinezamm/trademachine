@@ -541,6 +541,31 @@ def _check_signal_sync(symbol: str, tf: str) -> dict:
                 "reason": "insufficient_votes", "net_votes": _vote_result["net_votes"],
             }
 
+        # Level-to-level SL/TP (2026-09-29 decision) -- the ONE function
+        # backtest calls too (CLAUDE.md rule 6). No fallback to an ATR-
+        # multiple exit: if no level gives an acceptable reward:risk, the
+        # signal is rejected rather than sent with a worse-than-specified
+        # ratio (src/engine/exit_rules.py docstring has the full rule).
+        from src.engine.exit_rules import compute_level_based_sl_tp, load_exit_rules_params
+        _level_a = {
+            "id": signal["components"].get("level_id"),
+            "price_low": signal["components"]["level_price_low"],
+            "price_high": signal["components"]["level_price_high"],
+            "strength": signal["components"]["level_strength"],
+        }
+        _exit = compute_level_based_sl_tp(
+            signal["direction"], _level_a, float(candle["close"]), atr,
+            levels, _vote_result["net_votes"], load_exit_rules_params(),
+        )
+        if _exit is None:
+            return {
+                "signal": None, "as_of": candle["ts_utc"].isoformat(),
+                "reason": "no_valid_sl_tp",
+            }
+        signal["stop_loss"] = _exit["stop_loss"]
+        signal["take_profit"] = _exit["take_profit"]
+        signal["components"]["sl_tp"] = _exit
+
         signal_id = insert_signal(conn, signal)
         conn.commit()
         if signal_id is None:
@@ -550,6 +575,80 @@ def _check_signal_sync(symbol: str, tf: str) -> dict:
         out["id"] = signal_id
         out["ts_utc"] = out["ts_utc"].isoformat()
         return {"signal": out}
+    finally:
+        conn.close()
+
+
+def _check_reversal_close_sync(symbol: str, tf: str) -> dict | None:
+    """'توقف اجباری' rule (2026-09-29): for each still-open signal (per
+    direction), first tries to resolve its outcome from price history since
+    entry (reuses src/backtest/replay._determine_outcome -- CLAUDE.md rule
+    6, not a reimplementation), then -- if genuinely still open and not
+    already alerted -- checks whether H1 structure has flipped against it
+    (src/engine/exit_rules.detect_reversal_close). Returns at most one
+    advisory per call (n8n polls this every 5 minutes, same cadence as the
+    entry signal check)."""
+    import numpy as np
+    import talib
+
+    from src.backtest.replay import _determine_outcome
+    from src.engine.exit_rules import detect_reversal_close
+    from src.engine.signal_store import (
+        fetch_candles_range, fetch_open_signals, mark_reversal_alert_sent, mark_signal_outcome,
+    )
+
+    conn = get_connection()
+    try:
+        open_signals = fetch_open_signals(conn, symbol, tf)
+        if not open_signals:
+            return None
+
+        atr_period = load_levels_params()["atr_period"]
+        # Same source as backtest's load_break_atr_mult() (CLAUDE.md rule 6) --
+        # levels.break_atr_mult, NOT signal_rules.level_reversion.confirm_atr_mult
+        # (a different, unrelated threshold for the entry confirmation margin).
+        break_mult = float(load_levels_params()["break_atr_mult"])
+        latest_candle = fetch_latest_closed_candle(conn, symbol, tf)
+        if latest_candle is None:
+            return None
+        _structure_candles = fetch_candles(conn, symbol, tf, latest_candle["ts_utc"], lookback_bars=2000)
+        structure = compute_market_structure(_structure_candles, latest_candle["ts_utc"])["structure"]
+
+        for sig in open_signals:
+            if sig["stop_loss"] is None or sig["take_profit"] is None:
+                continue  # fired before this SL/TP wiring existed -- nothing to scan against
+
+            cands = fetch_candles_range(conn, symbol, tf, sig["ts_utc"], latest_candle["ts_utc"])
+            if len(cands) >= 2:
+                highs = np.array([float(c["high"]) for c in cands])
+                lows = np.array([float(c["low"]) for c in cands])
+                closes = np.array([float(c["close"]) for c in cands])
+                atr_arr = talib.ATR(highs, lows, closes, timeperiod=atr_period)
+                level_lo = float(sig["components"].get("level_price_low", 0))
+                level_hi = float(sig["components"].get("level_price_high", 0))
+                outcome, _exit_price = _determine_outcome(
+                    cands, atr_arr, 0, sig["entry"], sig["direction"],
+                    sig["stop_loss"], sig["take_profit"],
+                    max_safety_bars=len(cands),  # never force 'timeout' -- 'open' if nothing hit yet
+                    level_lo=level_lo, level_hi=level_hi, break_mult=break_mult,
+                )
+                if outcome in ("tp", "sl", "level_invalidated"):
+                    mark_signal_outcome(conn, sig["id"], outcome)
+                    conn.commit()
+                    continue  # closed -- no advisory needed
+
+            if sig["reversal_alert_sent"]:
+                continue
+            if detect_reversal_close(sig["direction"], structure):
+                mark_reversal_alert_sent(conn, sig["id"])
+                conn.commit()
+                return {
+                    "signal_id": sig["id"], "direction": sig["direction"],
+                    "entry": sig["entry"], "ts_utc": sig["ts_utc"].isoformat(),
+                    "structure": structure,
+                    "message": "توقف اجباری: ساختار بازار برخلاف این سیگنال برگشت — سیگنال باز را دستی ببندید.",
+                }
+        return None
     finally:
         conn.close()
 
@@ -614,11 +713,18 @@ async def signal_latest(
 ):
     """Runs the level_reversion rule (src/engine/level_reversion.py) against
     the most recent closed candle. If it fires, the signal is stored in
-    `signals` and returned; n8n polls this endpoint on a schedule."""
+    `signals` and returned; n8n polls this endpoint on a schedule.
+
+    Also runs the 'توقف اجباری' forced-stop check (_check_reversal_close_sync)
+    on the SAME poll and includes it as `close_advisory` -- at most one
+    manual-close advisory per call, independent of whether a new entry
+    signal fired this time."""
     allowed_tfs = load_levels_params()["timeframes"]
     if tf not in allowed_tfs:
         raise HTTPException(status_code=422, detail=f"tf must be one of {allowed_tfs}")
-    return await run_in_threadpool(_check_signal_sync, symbol, tf)
+    result = await run_in_threadpool(_check_signal_sync, symbol, tf)
+    result["close_advisory"] = await run_in_threadpool(_check_reversal_close_sync, symbol, tf)
+    return result
 
 
 def _fetch_latest_signal_sync(symbol: str, tf: str) -> dict:
