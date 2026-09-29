@@ -5,7 +5,9 @@ import math
 import numpy as np
 import pytest
 
-from src.backtest.replay import _determine_outcome
+from datetime import datetime, timezone
+
+from src.backtest.replay import _determine_outcome, _make_context
 
 
 # ---------------------------------------------------------------------------
@@ -190,3 +192,64 @@ def test_open_when_dataset_ends_before_safety_cap():
     cs = _make_candles(ENTRY_IDX + 3, default_close=2600.0)
     outcome, _ = _run(cs, "BUY")
     assert outcome == "open"
+
+
+# ---------------------------------------------------------------------------
+# _make_context — memory_pattern_bias wiring (2026-09-29 regression guard)
+#
+# Bug: _make_context() never accepted or forwarded a memory_result to
+# build_context(), so components["memory"] was unconditionally None on every
+# backtest bar and module_voting._vote_memory always voted 0 — regardless of
+# whether memory_results actually had rows for that period. Same bug class
+# as the dollar_correlation_direction all_dxy NameError fixed just before
+# this in the same file.
+# ---------------------------------------------------------------------------
+
+UTC = timezone.utc
+
+
+def _empty_context_args(as_of_ts):
+    return dict(
+        all_regime=[], all_rounds=[], all_fib=[], all_pats=[], all_gaps=[], all_corr=[],
+        close=2600.0, atr=3.0, as_of_ts=as_of_ts,
+    )
+
+
+def test_make_context_populates_memory_when_present():
+    as_of = datetime(2026, 1, 2, tzinfo=UTC)
+    all_memory = [
+        {"ts_utc": datetime(2026, 1, 1, tzinfo=UTC), "n_matches": 12,
+         "up_ratio": 0.72, "median_return": 1.5, "ci_low": 0.5, "ci_high": 2.0},
+    ]
+    ctx = _make_context(**_empty_context_args(as_of), all_memory=all_memory)
+    assert ctx["memory"] is not None
+    assert ctx["memory"]["up_ratio"] == 0.72
+    assert ctx["memory"]["n_matches"] == 12
+
+
+def test_make_context_memory_is_none_when_no_rows_yet():
+    as_of = datetime(2026, 1, 2, tzinfo=UTC)
+    ctx = _make_context(**_empty_context_args(as_of), all_memory=[])
+    assert ctx["memory"] is None
+
+
+def test_make_context_memory_respects_as_of_ts_anti_lookahead():
+    """A memory_results row computed AFTER as_of_ts must not be used —
+    _last_row_up_to() bisects on ts_utc <= as_of_ts."""
+    as_of = datetime(2026, 1, 1, tzinfo=UTC)
+    future_row = [{"ts_utc": datetime(2026, 1, 5, tzinfo=UTC), "n_matches": 9,
+                    "up_ratio": 0.9, "median_return": 2.0, "ci_low": 1.0, "ci_high": 3.0}]
+    ctx = _make_context(**_empty_context_args(as_of), all_memory=future_row)
+    assert ctx["memory"] is None
+
+
+def test_make_context_memory_picks_latest_not_first():
+    as_of = datetime(2026, 1, 3, tzinfo=UTC)
+    rows = [
+        {"ts_utc": datetime(2026, 1, 1, tzinfo=UTC), "n_matches": 5,
+         "up_ratio": 0.3, "median_return": -1.0, "ci_low": -2.0, "ci_high": 0.0},
+        {"ts_utc": datetime(2026, 1, 2, tzinfo=UTC), "n_matches": 8,
+         "up_ratio": 0.8, "median_return": 1.0, "ci_low": 0.2, "ci_high": 1.8},
+    ]
+    ctx = _make_context(**_empty_context_args(as_of), all_memory=rows)
+    assert ctx["memory"]["up_ratio"] == 0.8  # the 2026-01-02 row, not 2026-01-01

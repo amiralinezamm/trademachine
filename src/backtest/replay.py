@@ -386,6 +386,38 @@ def _fetch_all_rsi_snapshots(conn, symbol: str, tf: str,
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
+def _fetch_all_memory(conn, symbol: str, tf: str,
+                      min_ts=None, max_ts=None) -> list[dict]:
+    """SPEC.md 4.10 (memory_pattern_bias voter). 2026-09-29 bugfix: this
+    fetch didn't exist at all -- _make_context() never accepted or forwarded
+    a memory_result to build_context(), so `ctx["memory"]` was unconditionally
+    None on every bar of every backtest run and module_voting._vote_memory
+    always voted 0. Same bug class as the dollar_correlation_direction
+    NameError fixed just before this (a module wired into the live path's
+    fetch_db_context() but never into replay.py's pre-fetch)."""
+    with conn.cursor() as cur:
+        if min_ts is not None and max_ts is not None:
+            cur.execute(
+                """
+                SELECT computed_at AS ts_utc, n_matches, up_ratio, median_return, ci_low, ci_high
+                FROM memory_results
+                WHERE symbol=%s AND tf_origin=%s AND computed_at >= %s AND computed_at <= %s
+                ORDER BY computed_at
+                """,
+                (symbol, tf, min_ts, max_ts),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT computed_at AS ts_utc, n_matches, up_ratio, median_return, ci_low, ci_high
+                FROM memory_results WHERE symbol=%s AND tf_origin=%s ORDER BY computed_at
+                """,
+                (symbol, tf),
+            )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
 def _fetch_all_divergence_events(conn, symbol: str, tf: str,
                                  min_ts=None, max_ts=None) -> list[dict]:
     """D20 -- divergence_events (SPEC.md 4.19), both kinds together --
@@ -443,9 +475,15 @@ def _rows_up_to(sorted_rows, as_of_ts: datetime) -> list[dict]:
 
 
 def _last_row_up_to(sorted_rows, as_of_ts: datetime) -> dict | None:
+    """2026-09-29 bugfix: the plain-list fallback branch (no cached
+    _ts_keys, i.e. sorted_rows is a plain list rather than _PreIndexed) used
+    the bare name `ts_utc` instead of the string "ts_utc" -- a NameError.
+    Silent in production because every real caller passes a _PreIndexed
+    list (which always has _ts_keys, so this branch never ran) -- only
+    surfaced by a pure unit test that calls this with a plain list."""
     keys = getattr(sorted_rows, "_ts_keys", None)
     if keys is None:
-        keys = [r[ts_utc] for r in sorted_rows]
+        keys = [r["ts_utc"] for r in sorted_rows]
     idx = bisect.bisect_right(keys, as_of_ts)
     return sorted_rows[idx - 1] if idx > 0 else None
 
@@ -533,8 +571,12 @@ def _make_context(
     divergence_recency_bars: int = 12,
     all_dxy: list[dict] | None = None,
     dxy_direction_bars: int = 3,
+    all_memory: list[dict] | None = None,
 ) -> dict:
     from src.engine.signal_context import build_context
+
+    # 2026-09-29 bugfix: was never computed/passed -- see _fetch_all_memory().
+    memory_result = _last_row_up_to(all_memory, as_of_ts) if all_memory else None
 
     regime_snap = _last_row_up_to(all_regime, as_of_ts)
     regime_snaps = [regime_snap] if regime_snap else []
@@ -571,6 +613,7 @@ def _make_context(
         divergence_recency_bars=divergence_recency_bars,
         dxy_candles=all_dxy or [],
         dxy_direction_bars=dxy_direction_bars,
+        memory_result=memory_result,
     )
 
 
@@ -819,10 +862,14 @@ def run_backtest(
             _corr_cfg = yaml.safe_load(_f).get("correlation", {})
         _dxy_dir_bars = int(_corr_cfg.get("dxy_direction_bars", 3))
         all_dxy = _PreIndexed(_fetch_all_candles(conn, "DXY@", tf, _fetch_min, to_ts))
-        log.info("  levels=%d history_keys=%d regime=%d rounds=%d fib=%d pats=%d gaps=%d corr=%d matrix=%d rsi=%d div=%d dxy=%d",
+        # memory_pattern_bias voter (SPEC.md 4.10): see _fetch_all_memory()
+        # docstring -- was never fetched here at all, so this voter always
+        # voted 0 in every backtest run to date, regardless of real data.
+        all_memory = _PreIndexed(_fetch_all_memory(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts))
+        log.info("  levels=%d history_keys=%d regime=%d rounds=%d fib=%d pats=%d gaps=%d corr=%d matrix=%d rsi=%d div=%d dxy=%d memory=%d",
                  len(all_levels), len(history_by_id), len(all_regime), len(all_rounds),
                  len(all_fib), len(all_pats), len(all_gaps), len(all_corr),
-                 len(all_matrix), len(all_rsi), len(all_div), len(all_dxy))
+                 len(all_matrix), len(all_rsi), len(all_div), len(all_dxy), len(all_memory))
 
         # Sort gap list (already ordered by ts_utc from query, but ensure)
         all_gaps.sort(key=lambda r: r["ts_utc"])
@@ -929,6 +976,7 @@ def run_backtest(
                 divergence_recency_bars=_voting_params.get("divergence_recency_bars", 12),
                 all_dxy=all_dxy,
                 dxy_direction_bars=_dxy_dir_bars,
+                all_memory=all_memory,
             )
             signal["components"].update(ctx)
             signal["components"]["market_structure"] = _structure
