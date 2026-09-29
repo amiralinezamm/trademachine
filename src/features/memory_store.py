@@ -5,6 +5,48 @@ import json
 from datetime import datetime
 from typing import Any
 
+import psycopg2.extras
+
+
+def register_proposed_rule(conn, params: dict[str, Any]) -> None:
+    """rules registry (SPEC.md 4.16, decision D20): memory_pattern_bias
+    starts status='proposed'. Idempotent -- DO NOTHING on conflict, same
+    convention as matrix_store.register_proposed_rule /
+    rsi_store.register_proposed_rules.
+
+    D20 already names memory_pattern_bias as one of the six voters
+    connected via the rules_registry.allow_proposed_in_voting flag -- this
+    function was simply never called anywhere, so it never actually voted.
+
+    NOTE (separate from this task): module_voting._vote_memory's up_ratio
+    thresholds (0.6/0.4) and minimum match count (3) are hardcoded in that
+    function, not read from config/params.yaml -- recorded here as
+    `params` for traceability, not moved to config by this change."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO rules (id, statement, origin, status, params, created_at)
+            VALUES (%s, %s, %s, 'proposed', %s, NOW())
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (
+                "memory_pattern_bias",
+                "STUMPY K=window_k analogue match: agrees with BUY when up_ratio "
+                "of the top_n historical analogues' H=horizon_h forward return > 0.6, "
+                "agrees with SELL when < 0.4 (inverse for SELL); votes 0 in the middle "
+                "band or when n_matches < 3.",
+                "SPEC.md 4.10, decision D20",
+                psycopg2.extras.Json({
+                    "window_k": params["window_k"],
+                    "horizon_h": params["horizon_h"],
+                    "top_n": params["top_n"],
+                    "up_ratio_bullish_thresh": 0.6,
+                    "up_ratio_bearish_thresh": 0.4,
+                    "min_matches": 3,
+                }),
+            ),
+        )
+
 
 def upsert_memory_result(conn, result: dict[str, Any]) -> dict[str, int]:
     with conn.cursor() as cur:

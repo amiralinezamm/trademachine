@@ -62,6 +62,7 @@ ssh xauusd-bot "cd /opt/xauusd-bot && /opt/xauusd-bot/src/api/venv/bin/python /t
 | gap_near_filter | testing — WR=63.3% وقتی gap باز < 5 ATR هست (فقط rules، بدون کد) |
 | double_touch_confidence_multiplier | proposed — هنوز کد اجرایی ندارد |
 | pressure_reversal | rejected |
+| matrix_score_mtf_agreement, rsi_overbought_oversold, rsi_price_divergence, macd_price_divergence, regime_quality, memory_pattern_bias, dollar_correlation_direction | **نامعلوم — احتمالاً بدون رکورد.** کد ۷ voter proposed کامل است ولی تابع ثبتشان (`register_proposed_rule(s)`) در هیچ مسیر اجرایی صدا زده نمی‌شد؛ یعنی احتمالاً هیچ‌کدام تا امروز واقعاً رأی نداده‌اند (D22، ۲۰۲۶-۰۹-۲۹). `python3 scripts/register_proposed_voters.py` را روی سرور اجرا کن تا وضعیت واقعی چاپ شود و رکوردها (idempotent) ساخته شوند.
 
 ## سرویس‌های systemd
 ```bash
