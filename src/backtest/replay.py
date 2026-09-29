@@ -531,6 +531,8 @@ def _make_context(
     all_rsi: list[dict] | None = None,
     all_divergence: list[dict] | None = None,
     divergence_recency_bars: int = 12,
+    all_dxy: list[dict] | None = None,
+    dxy_direction_bars: int = 3,
 ) -> dict:
     from src.engine.signal_context import build_context
 
@@ -567,6 +569,8 @@ def _make_context(
         rsi_snaps=all_rsi or [],
         divergence_rows=all_divergence or [],
         divergence_recency_bars=divergence_recency_bars,
+        dxy_candles=all_dxy or [],
+        dxy_direction_bars=dxy_direction_bars,
     )
 
 
@@ -681,10 +685,21 @@ def run_backtest(
     allow_proposed: bool | None = None,
     min_net_votes_override: float | None = None,
     holdout_mode: bool = False,
+    rule_version_suffix: str = "",
 ) -> dict[str, Any]:
     """Run the replay backtest and write results to the signals table.
 
     dry_run=True prints stats without writing to DB.
+
+    rule_version_suffix: appended to every written signal's rule_version
+    (completes the config/costs.yaml backtest.rule_version_suffix knob that
+    was documented but never wired up). "" (default) writes the SAME
+    rule_version the live path uses -- correct for the documented full-
+    history reseed use case. Pass a non-empty suffix for any dry_run=False
+    run whose date range can overlap live-written signals (e.g. a HOLDOUT
+    analysis run covering recent dates) so the ON CONFLICT (ts_utc,
+    rule_version) upsert in _upsert_signal() cannot collide with and
+    overwrite real live signal rows.
 
     voter_filter (D20, 2026-09-25 -- per-module isolation for the quick
     proposed-rule look, step 4/5): when set, ONLY the named module_voting
@@ -776,7 +791,14 @@ def run_backtest(
             _lv["price_high"] = float(_lv["price_high"])
             _lv["strength"]   = float(_lv["strength"])
         all_levels = _PreIndexed(_raw_levels, "created_ts")
-        _raw_hist  = _fetch_all_levels_history(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts)
+        # 2026-09-29 bugfix: no min_ts floor here. A level's last touch can be
+        # >30 days before from_ts and still be its true current state (the live
+        # path's fetch_active_levels() looks back unbounded, same as this must).
+        # Truncating history caused _level_state_at() to default every such
+        # level to (strength=0.0, status="active"), which zeroed the median
+        # strength filter in check_level_reversion and suppressed ALL signals
+        # for any short-window backtest run after a quiet period.
+        _raw_hist  = _fetch_all_levels_history(conn, symbol, tf, min_ts=None, max_ts=to_ts)
         history_by_id = {lid: _PreIndexed(rows) for lid, rows in _raw_hist.items()}
         all_regime  = _PreIndexed(_fetch_all_regime(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts))
         all_rounds  = _PreIndexed(_fetch_all_round_hits(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts))
@@ -787,10 +809,20 @@ def run_backtest(
         all_matrix  = _PreIndexed(_fetch_all_matrix(conn, symbol, min_ts=_fetch_min, max_ts=to_ts))
         all_rsi     = _PreIndexed(_fetch_all_rsi_snapshots(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts))
         all_div     = _PreIndexed(_fetch_all_divergence_events(conn, symbol, tf, min_ts=_fetch_min, max_ts=to_ts), "confirmed_ts")
-        log.info("  levels=%d history_keys=%d regime=%d rounds=%d fib=%d pats=%d gaps=%d corr=%d matrix=%d rsi=%d div=%d",
+        # dollar_correlation_direction voter (D21, SPEC.md 4.8-a): same DXY@
+        # M5 series + dxy_direction_bars config the live path reads in
+        # signal_context.py's build_context_for_signal(). Was previously
+        # never fetched here -- run_backtest() unconditionally passed
+        # all_dxy/dxy_direction_bars into _make_context() (NameError) and
+        # _make_context() didn't even forward them to build_context().
+        with open(PARAMS_PATH) as _f:
+            _corr_cfg = yaml.safe_load(_f).get("correlation", {})
+        _dxy_dir_bars = int(_corr_cfg.get("dxy_direction_bars", 3))
+        all_dxy = _PreIndexed(_fetch_all_candles(conn, "DXY@", tf, _fetch_min, to_ts))
+        log.info("  levels=%d history_keys=%d regime=%d rounds=%d fib=%d pats=%d gaps=%d corr=%d matrix=%d rsi=%d div=%d dxy=%d",
                  len(all_levels), len(history_by_id), len(all_regime), len(all_rounds),
                  len(all_fib), len(all_pats), len(all_gaps), len(all_corr),
-                 len(all_matrix), len(all_rsi), len(all_div))
+                 len(all_matrix), len(all_rsi), len(all_div), len(all_dxy))
 
         # Sort gap list (already ordered by ts_utc from query, but ensure)
         all_gaps.sort(key=lambda r: r["ts_utc"])
@@ -943,6 +975,8 @@ def run_backtest(
             stats["total_pnl"] += pnl
 
             signal["entry"] = entry
+            if rule_version_suffix:
+                signal["rule_version"] = signal["rule_version"] + rule_version_suffix
             _last_by_dir[signal["direction"]] = {"entry": entry, "outcome": outcome}
             stats["signals"] += 1
             stats[outcome] += 1
