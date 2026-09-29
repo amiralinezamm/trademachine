@@ -39,7 +39,7 @@ def db_conn():
 
 
 def test_fetch_latest_signal_returns_none_when_nothing_stored(db_conn):
-    assert fetch_latest_signal(db_conn, "__TEST_SIGNALS_EMPTY__", "M5") is None
+    assert fetch_latest_signal(db_conn, "__TEST_SIGNALS_EMPTY__", "M5", rule_version="__TEST_RULE__") is None
 
 
 def test_fetch_latest_signal_returns_most_recent_by_ts(db_conn):
@@ -48,7 +48,7 @@ def test_fetch_latest_signal_returns_most_recent_by_ts(db_conn):
     insert_signal(db_conn, older)
     insert_signal(db_conn, newer)
 
-    result = fetch_latest_signal(db_conn, "__TEST_SIGNALS__", "M5")
+    result = fetch_latest_signal(db_conn, "__TEST_SIGNALS__", "M5", rule_version="__TEST_RULE__")
 
     assert result is not None
     assert result["direction"] == "SELL"
@@ -63,8 +63,8 @@ def test_fetch_latest_signal_ignores_other_symbol_tf(db_conn):
     insert_signal(db_conn, sig)
 
     # stored under tf=H1 -- must not show up for tf=M5
-    assert fetch_latest_signal(db_conn, "__TEST_SIGNALS__", "M5") is None
-    result = fetch_latest_signal(db_conn, "__TEST_SIGNALS__", "H1")
+    assert fetch_latest_signal(db_conn, "__TEST_SIGNALS__", "M5", rule_version="__TEST_RULE__") is None
+    result = fetch_latest_signal(db_conn, "__TEST_SIGNALS__", "H1", rule_version="__TEST_RULE__")
     assert result is not None
     assert result["ts_utc"] == datetime(2099, 1, 3, tzinfo=UTC)
 
@@ -84,7 +84,7 @@ def test_fetch_latest_signal_survives_already_fired_duplicate(db_conn):
     assert first_id is not None
     assert second_id is None  # confirms the duplicate-insert behavior being tested
 
-    result = fetch_latest_signal(db_conn, "__TEST_SIGNALS__", "M5")
+    result = fetch_latest_signal(db_conn, "__TEST_SIGNALS__", "M5", rule_version="__TEST_RULE__")
     assert result is not None
     assert result["id"] == first_id
 
@@ -101,7 +101,7 @@ def test_fetch_open_signals_excludes_closed_ones(db_conn):
     insert_signal(db_conn, open_one)
     mark_signal_outcome(db_conn, closed_id, "tp")
 
-    open_signals = fetch_open_signals(db_conn, "__TEST_SIGNALS__", "M5")
+    open_signals = fetch_open_signals(db_conn, "__TEST_SIGNALS__", "M5", rule_version="__TEST_RULE__")
 
     assert len(open_signals) == 1
     assert open_signals[0]["ts_utc"] == datetime(2099, 2, 2, tzinfo=UTC)
@@ -116,7 +116,7 @@ def test_fetch_open_signals_returns_latest_open_per_direction(db_conn):
     insert_signal(db_conn, buy2)
     insert_signal(db_conn, sell1)
 
-    open_signals = fetch_open_signals(db_conn, "__TEST_SIGNALS__", "M5")
+    open_signals = fetch_open_signals(db_conn, "__TEST_SIGNALS__", "M5", rule_version="__TEST_RULE__")
     by_dir = {s["direction"]: s for s in open_signals}
 
     assert by_dir["BUY"]["ts_utc"] == datetime(2099, 2, 4, tzinfo=UTC)  # latest BUY, not buy1
@@ -142,7 +142,7 @@ def test_mark_reversal_alert_sent_flips_the_flag(db_conn):
 
     mark_reversal_alert_sent(db_conn, sid)
 
-    open_signals = fetch_open_signals(db_conn, "__TEST_SIGNALS__", "M5")
+    open_signals = fetch_open_signals(db_conn, "__TEST_SIGNALS__", "M5", rule_version="__TEST_RULE__")
     matching = [s for s in open_signals if s["id"] == sid]
     assert matching and matching[0]["reversal_alert_sent"] is True
 

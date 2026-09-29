@@ -14,6 +14,7 @@ from src.engine.signal_store import (
     fetch_active_levels,
     fetch_atr_at,
     fetch_latest_closed_candle,
+    LIVE_RULE_VERSION,
     fetch_latest_signal,
     fetch_last_signal_for_direction,
     insert_signal,
@@ -78,7 +79,9 @@ async def health():
             "SELECT ts_utc FROM candles WHERE symbol='XAUUSD@' AND tf='M5' ORDER BY ts_utc DESC LIMIT 1"
         )
         last_signal_row = await conn.fetchrow(
-            "SELECT ts_utc, direction, rule_version FROM signals ORDER BY id DESC LIMIT 1"
+            "SELECT ts_utc, direction, rule_version FROM signals"
+            " WHERE rule_version = $1 ORDER BY id DESC LIMIT 1",
+            LIVE_RULE_VERSION,
         )
     now = datetime.now(timezone.utc)
     if last_candle_row:

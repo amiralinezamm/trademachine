@@ -835,7 +835,7 @@ def run_backtest(
     allow_proposed: bool | None = None,
     min_net_votes_override: float | None = None,
     holdout_mode: bool = False,
-    rule_version_suffix: str = "",
+    rule_version_suffix: str | None = None,
     record_candidates: str | None = None,
 ) -> dict[str, Any]:
     """Run the replay backtest and write results to the signals table.
@@ -855,15 +855,14 @@ def run_backtest(
     semantics), so a sweep that fires more signals is a close, not exact,
     approximation of re-running at that threshold.
 
-    rule_version_suffix: appended to every written signal's rule_version
-    (completes the config/costs.yaml backtest.rule_version_suffix knob that
-    was documented but never wired up). "" (default) writes the SAME
-    rule_version the live path uses -- correct for the documented full-
-    history reseed use case. Pass a non-empty suffix for any dry_run=False
-    run whose date range can overlap live-written signals (e.g. a HOLDOUT
-    analysis run covering recent dates) so the ON CONFLICT (ts_utc,
-    rule_version) upsert in _upsert_signal() cannot collide with and
-    overwrite real live signal rows.
+    rule_version_suffix: appended to every written signal's rule_version.
+    None (default) reads config/costs.yaml backtest.rule_version_suffix
+    ("_bt"), so replayed rows are always distinguishable from live ones:
+    the live reads in src/engine/signal_store.py filter on the exact live
+    rule_version, and the ON CONFLICT (ts_utc, rule_version) upsert in
+    _upsert_signal() can't overwrite a real live row. Passing "" explicitly
+    writes the live rule_version -- only for a deliberate reseed, and those
+    rows then ARE treated as live history (spacing filter, /signal/last).
 
     voter_filter (D20, 2026-09-25 -- per-module isolation for the quick
     proposed-rule look, step 4/5): when set, ONLY the named module_voting
@@ -912,6 +911,8 @@ def run_backtest(
     costs = load_costs()
     bt_cfg = costs.get("backtest", {})
     max_safety_bars = int(bt_cfg.get("max_safety_bars", 288))
+    if rule_version_suffix is None:
+        rule_version_suffix = str(bt_cfg.get("rule_version_suffix", ""))
 
     # 2026-09-29: level-to-level SL/TP replaces the old fixed ATR-multiple
     # exit (costs.yaml no longer has sl_atr_mult/tp_atr_mult). ONE function,
@@ -1292,8 +1293,8 @@ if __name__ == "__main__":
     ap.add_argument("--dry-run", action="store_true", help="don't write to the signals table")
     ap.add_argument("--record-candidates", metavar="RUN_TAG", default=None,
                     help="log every candidate + evaluated outcome to bt_candidates under this tag")
-    ap.add_argument("--rule-version-suffix", default="",
-                    help="suffix for written rule_version (use for any non-dry run overlapping live dates)")
+    ap.add_argument("--rule-version-suffix", default=None,
+                    help="suffix for written rule_version (default: costs.yaml backtest.rule_version_suffix)")
     args = ap.parse_args()
 
     from_ts = datetime.fromisoformat(args.from_date).replace(tzinfo=UTC)

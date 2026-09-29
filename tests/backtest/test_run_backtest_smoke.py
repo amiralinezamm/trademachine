@@ -122,3 +122,14 @@ def test_vote_rejected_candidate_is_recorded_with_outcomes(fake_db):
     assert row["outcome"] == "tp" and row["u_outcome"] == "tp"
     assert row["rr"] >= 2.0
     assert row["risk_usd"] > 0
+
+
+def test_non_dry_run_writes_backtest_suffix_not_live_rule_version(fake_db, monkeypatch):
+    """Backtest rows must never carry the live rule_version by default --
+    live reads (signal_store) filter on it exactly."""
+    from src.engine.level_reversion import RULE_ID
+    written: list[dict] = []
+    monkeypatch.setattr(replay, "_upsert_signal", lambda conn, sig, *a, **k: written.append(sig))
+    replay.run_backtest(T0, T0 + timedelta(hours=10), dry_run=False, min_net_votes_override=0)
+    assert written, "the synthetic setup fires exactly one signal"
+    assert all(s["rule_version"] == RULE_ID + "_bt" for s in written)

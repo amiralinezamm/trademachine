@@ -7,7 +7,16 @@ import json
 from datetime import datetime
 from typing import Any
 
+from src.engine.level_reversion import RULE_ID
 from src.features.levels_store import get_connection
+
+# Live reads filter on the LIVE rule_version. Backtest writes to the same
+# `signals` table (replay._upsert_signal); with rule_version_suffix="" those
+# rows used to be indistinguishable, and the unfiltered reads below then
+# treated a replayed signal as "the last live signal" -- skewing the live
+# same-direction spacing filter, /signal/last, /health and the
+# reversal-close advisory (found on the server 2026-09-29).
+LIVE_RULE_VERSION = RULE_ID
 
 
 def fetch_latest_closed_candle(conn, symbol: str, tf: str) -> dict[str, Any] | None:
@@ -108,7 +117,9 @@ def insert_signal(conn, signal: dict[str, Any]) -> int | None:
         return None
 
 
-def fetch_latest_signal(conn, symbol: str, tf: str) -> dict[str, Any] | None:
+def fetch_latest_signal(
+    conn, symbol: str, tf: str, rule_version: str = LIVE_RULE_VERSION
+) -> dict[str, Any] | None:
     """Most recent row in `signals` for this symbol/tf, regardless of
     outcome or whether it was 'just' fired. `signals` has no symbol/tf
     columns of its own (SPEC.md 4.15 schema) -- level_reversion.py always
@@ -129,10 +140,11 @@ def fetch_latest_signal(conn, symbol: str, tf: str) -> dict[str, Any] | None:
                    confidence, components, rule_version, outcome, pnl_usd
             FROM signals
             WHERE components->>'symbol' = %s AND components->>'tf' = %s
+              AND rule_version = %s
             ORDER BY ts_utc DESC
             LIMIT 1
             """,
-            (symbol, tf),
+            (symbol, tf, rule_version),
         )
         row = cur.fetchone()
     if row is None:
@@ -153,7 +165,7 @@ def fetch_latest_signal(conn, symbol: str, tf: str) -> dict[str, Any] | None:
 
 
 def fetch_last_signal_for_direction(
-    conn, direction: str, as_of_ts
+    conn, direction: str, as_of_ts, rule_version: str = LIVE_RULE_VERSION
 ) -> "dict[str, Any] | None":
     """Return the most recent signal with `direction` whose ts_utc <= as_of_ts.
 
@@ -166,11 +178,11 @@ def fetch_last_signal_for_direction(
             """
             SELECT entry, outcome
             FROM signals
-            WHERE direction = %s AND ts_utc <= %s
+            WHERE direction = %s AND ts_utc <= %s AND rule_version = %s
             ORDER BY ts_utc DESC
             LIMIT 1
             """,
-            (direction, as_of_ts),
+            (direction, as_of_ts, rule_version),
         )
         row = cur.fetchone()
     if row is None:
@@ -178,7 +190,9 @@ def fetch_last_signal_for_direction(
     return {"entry": float(row[0]), "outcome": row[1]}
 
 
-def fetch_open_signals(conn, symbol: str, tf: str) -> list[dict[str, Any]]:
+def fetch_open_signals(
+    conn, symbol: str, tf: str, rule_version: str = LIVE_RULE_VERSION
+) -> list[dict[str, Any]]:
     """'توقف اجباری' rule (2026-09-29): the most recent OPEN (outcome IS
     NULL) signal per direction for this symbol/tf -- what the reversal-close
     check (src/engine/exit_rules.detect_reversal_close) evaluates against.
@@ -193,10 +207,10 @@ def fetch_open_signals(conn, symbol: str, tf: str) -> list[dict[str, Any]]:
                    components, reversal_alert_sent
             FROM signals
             WHERE components->>'symbol' = %s AND components->>'tf' = %s
-              AND outcome IS NULL
+              AND outcome IS NULL AND rule_version = %s
             ORDER BY direction, ts_utc DESC
             """,
-            (symbol, tf),
+            (symbol, tf, rule_version),
         )
         rows = cur.fetchall()
     return [

@@ -37,4 +37,4 @@ commission: 0.0          # broker charges via spread only (confirmed by user)
 # the SAME exit_rules.compute_level_based_sl_tp (CLAUDE.md rule 6).
 backtest:
   # timeout_bars: not read by the code — exit uses max_safety_bars (default 288)
-  rule_version_suffix: ""  # appended to rule_version for backtest runs; "" = same as live
+  rule_version_suffix: "_bt"  # appended to rule_version for backtest writes; live reads filter the exact live rule_version, so "" would make replayed rows look live
