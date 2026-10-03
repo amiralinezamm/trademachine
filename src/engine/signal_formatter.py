@@ -46,10 +46,18 @@ ALERT_DISCLAIMER = (
     "مسئولیت هر تصمیم معاملاتی با شماست."
 )
 
-_DIVIDER = "━━━━━━━━━━━━━━━"
+# Shared visual language across EVERY Telegram message this project sends
+# (signal alerts, reversal advisories, and -- per the 2026-10-03 follow-up --
+# /status, /levels, /gaps, /start too): one divider under the header, one
+# <blockquote> per "block" of related facts, HTML parse_mode throughout.
+# Exported (not module-private) so src/telegram_bot/formatters.py reuses the
+# exact same divider/time rendering instead of a second, driftable copy.
+DIVIDER = "━━━━━━━━━━━━━━━"
 
 
-def _tehran_time_fa(ts_iso_or_dt: "str | datetime") -> str:
+def tehran_time_fa(ts_iso_or_dt: "str | datetime") -> str:
+    """UTC ISO string or datetime -> 'جمعه ۱۲ مهر، ساعت ۱۴:۳۵' (CLAUDE.md
+    rule 4: storage/computation stays UTC, this is a DISPLAY conversion)."""
     dt = ts_iso_or_dt if isinstance(ts_iso_or_dt, datetime) else datetime.fromisoformat(ts_iso_or_dt)
     if dt.tzinfo is None:
         from datetime import timezone
@@ -57,6 +65,16 @@ def _tehran_time_fa(ts_iso_or_dt: "str | datetime") -> str:
     day = jalali_day_header_fa(dt)
     hm = to_persian_digits(dt.astimezone(_TEHRAN()).strftime("%H:%M"))
     return f"{day}، ساعت {hm}"
+
+
+def escape_html(text: str) -> str:
+    """Escape user/exception-derived text before it goes inside a Telegram
+    HTML-parse-mode message -- an exception string containing a stray '<'
+    or '&' would otherwise break rendering (or silently drop the rest of
+    the message) once every bot reply moved to parse_mode='HTML'."""
+    return (
+        str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
 
 
 def _TEHRAN():
@@ -112,7 +130,7 @@ def build_signal_alert_text(signal: dict[str, Any]) -> str:
 
     lines = [
         f"{arrow} <b>سیگنال {dir_label}</b> — {symbol}",
-        _DIVIDER,
+        DIVIDER,
         price_line,
         "",
         "<blockquote>"
@@ -134,7 +152,7 @@ def build_signal_alert_text(signal: dict[str, Any]) -> str:
     ts = signal.get("ts_utc")
     lines += [
         "",
-        f"🕐 زمان (تهران): {_tehran_time_fa(ts)}" if ts else "🕐 زمان: ?",
+        f"🕐 زمان (تهران): {tehran_time_fa(ts)}" if ts else "🕐 زمان: ?",
         f"📘 قانون: {signal.get('rule_version', '?')}",
         "",
         ALERT_DISCLAIMER,
@@ -165,8 +183,8 @@ def build_reversal_advisory_text(advisory: dict[str, Any], current_price: float 
 
     lines = [
         "⚠️ <b>توقف اجباری</b>",
-        _DIVIDER,
-        f"{arrow} پوزیشن باز: {dir_label} از {_tehran_time_fa(advisory['ts_utc'])}" if advisory.get("ts_utc") else f"{arrow} پوزیشن باز: {dir_label}",
+        DIVIDER,
+        f"{arrow} پوزیشن باز: {dir_label} از {tehran_time_fa(advisory['ts_utc'])}" if advisory.get("ts_utc") else f"{arrow} پوزیشن باز: {dir_label}",
         f"💰 قیمت ورود: <b>{_f(entry, 3)}</b>{move_line}",
         "",
         f"<blockquote>🧭 ساختار H1 جدید: {structure} (برخلاف این پوزیشن)</blockquote>",

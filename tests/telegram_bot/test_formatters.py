@@ -1,15 +1,47 @@
 """Unit tests for Telegram bot message formatters.
 
 No Telegram API, no DB, no HTTP — pure function tests with mock data.
+Every formatter now shares one visual language (DIVIDER + <blockquote>
+per fact-block, HTML parse_mode) -- 2026-10-03 follow-up to the signal
+alert revamp (src/engine/signal_formatter.py).
 """
 import pytest
+from src.engine.signal_formatter import DIVIDER
 from src.telegram_bot.formatters import (
     DISCLAIMER,
+    fmt_error,
     fmt_gaps,
     fmt_levels,
     fmt_news,
+    fmt_start,
     fmt_status,
 )
+
+# ── /start ────────────────────────────────────────────────────────────────────
+
+
+def test_start_lists_all_commands_in_a_quote_block():
+    msg = fmt_start()
+    quote_body = msg[msg.index("<blockquote>") : msg.index("</blockquote>")]
+    for cmd in ("/status", "/levels", "/gaps", "/news"):
+        assert cmd in quote_body
+    assert DIVIDER in msg
+    assert "آزمایشی" in msg
+
+
+# ── error replies ─────────────────────────────────────────────────────────────
+
+
+def test_error_escapes_html_special_chars_in_exception_text():
+    """Every bot reply is now sent with parse_mode='HTML' -- an exception
+    message containing '<'/'&' must not break (or silently truncate) the
+    rendered message."""
+    exc = Exception("timeout calling <http://bad> & giving up")
+    msg = fmt_error("دریافت سیگنال", exc)
+    assert "<http://bad>" not in msg
+    assert "&lt;http://bad&gt;" in msg
+    assert "دریافت سیگنال" in msg
+
 
 # ── /status ───────────────────────────────────────────────────────────────────
 
@@ -17,7 +49,7 @@ from src.telegram_bot.formatters import (
 def test_status_no_signal():
     data = {"signal": None, "reason": "no candles", "as_of": "2026-09-19T10:00:00"}
     msg = fmt_status(data)
-    assert "سیگنال فعال: ندارد" in msg
+    assert "سیگنال فعال" in msg and "ندارد" in msg
     assert "no candles" in msg
     assert DISCLAIMER in msg
 
@@ -28,7 +60,7 @@ def test_status_no_signal_without_as_of():
     'آخرین بررسی: ' line."""
     data = {"signal": None, "reason": "no_signal_stored"}
     msg = fmt_status(data)
-    assert "سیگنال فعال: ندارد" in msg
+    assert "سیگنال فعال" in msg and "ندارد" in msg
     assert "no_signal_stored" in msg
     assert "آخرین بررسی" not in msg
     assert DISCLAIMER in msg
@@ -138,12 +170,24 @@ def test_levels_both_sides():
         },
     }
     msg = fmt_levels(data)
-    assert "2350.0" in msg
+    assert "2350.00" in msg
     assert "2330" in msg
     assert "2370" in msg
     assert "مقاومت" in msg
     assert "حمایت" in msg
+    assert DIVIDER in msg
     assert DISCLAIMER in msg
+
+
+def test_levels_support_and_resistance_each_in_their_own_quote_block():
+    data = {
+        "price": 2350.0,
+        "support": {"price_low": 2330.0, "price_high": 2335.0, "distance": 15.0, "strength": 1.2},
+        "resistance": {"price_low": 2370.0, "price_high": 2375.0, "distance": 20.0, "strength": 0.9},
+    }
+    msg = fmt_levels(data)
+    assert msg.count("<blockquote>") == 2
+    assert msg.count("</blockquote>") == 2
 
 
 def test_levels_no_support():
@@ -220,6 +264,8 @@ def test_gaps_with_data():
     assert "HALF_FILLED" in msg
     assert "2360" in msg
     assert "0.78" in msg
+    assert msg.count("<blockquote>") == 2
+    assert DIVIDER in msg
     assert DISCLAIMER in msg
 
 
@@ -235,8 +281,9 @@ def test_gaps_truncates_at_five():
         for i in range(10)
     ]
     msg = fmt_gaps(gaps)
-    # Only first 5 should appear; gap_high=6 is the 6th entry — should not be shown
-    assert "6.0–7.0" not in msg
+    assert msg.count("<blockquote>") == 5
+    # the 6th gap ([5.0 – 6.0]) must not appear at all
+    assert "[5.0 – 6.0]" not in msg
 
 
 # ── /news ─────────────────────────────────────────────────────────────────────

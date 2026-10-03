@@ -5,8 +5,13 @@ string. No DB access, no HTTP calls — easy to unit-test with mock data.
 """
 from __future__ import annotations
 
-from src.engine.signal_formatter import build_signal_alert_text
+from src.engine.signal_formatter import DIVIDER, build_signal_alert_text, escape_html
 
+# 2026-10-03: every bot reply now shares the signal alert's visual language
+# (DIVIDER under the header, one <blockquote> per fact-block, HTML parse
+# mode throughout -- see src/telegram_bot/bot.py, every _reply call passes
+# parse_mode="HTML"). DISCLAIMER text is unescaped literal HTML-safe Farsi
+# (no '<'/'&'), so it's fine to append directly everywhere below.
 DISCLAIMER = (
     "\n\n⚠️ این سیگنال‌ها آزمایشی‌اند و هنوز تایید نهایی نشده‌اند؛ "
     "مسئولیت هر تصمیم معاملاتی با شماست."
@@ -24,10 +29,10 @@ def fmt_status(data: dict) -> str:
     if sig is None:
         reason = data.get("reason", "")
         as_of = data.get("as_of")
-        lines = ["📭 سیگنال فعال: ندارد"]
+        lines = ["📭 <b>سیگنال فعال:</b> ندارد", DIVIDER]
         if as_of:
             lines.append(f"🕐 آخرین بررسی: {as_of}")
-        lines.append(f"دلیل: {reason}")
+        lines.append(f"دلیل: {escape_html(reason)}")
         return "\n".join(lines) + DISCLAIMER
 
     if "telegram_html" in sig:
@@ -36,25 +41,33 @@ def fmt_status(data: dict) -> str:
 
 
 def fmt_levels(data: dict) -> str:
-    """Format /levels/near-price response."""
+    """Format /levels/near-price response. Same visual language as the
+    signal alert: price at the moment of the check up top, each level in
+    its own quote block so support/resistance are never read as one
+    blurred line."""
     price = data.get("price")
     sup = data.get("support")
     res = data.get("resistance")
 
-    lines = [f"📍 قیمت فعلی: {price}"]
+    price_s = f"{price:.2f}" if price is not None else "?"
+    lines = [f"📍 <b>قیمت در لحظه‌ی بررسی:</b> {price_s}", DIVIDER]
 
     if res:
         lines.append(
-            f"🔴 مقاومت نزدیک: [{res['price_low']:.2f}–{res['price_high']:.2f}]"
-            f"  (فاصله: {res['distance']:.2f})  قدرت: {res['strength']:.2f}"
+            "<blockquote>"
+            f"🔴 مقاومت نزدیک: [{res['price_low']:.2f} – {res['price_high']:.2f}]\n"
+            f"فاصله: {res['distance']:.2f}  |  قدرت: {res['strength']:.2f}"
+            "</blockquote>"
         )
     else:
         lines.append("🔴 مقاومت: پیدا نشد")
 
     if sup:
         lines.append(
-            f"🟢 حمایت نزدیک: [{sup['price_low']:.2f}–{sup['price_high']:.2f}]"
-            f"  (فاصله: {sup['distance']:.2f})  قدرت: {sup['strength']:.2f}"
+            "<blockquote>"
+            f"🟢 حمایت نزدیک: [{sup['price_low']:.2f} – {sup['price_high']:.2f}]\n"
+            f"فاصله: {sup['distance']:.2f}  |  قدرت: {sup['strength']:.2f}"
+            "</blockquote>"
         )
     else:
         lines.append("🟢 حمایت: پیدا نشد")
@@ -63,12 +76,13 @@ def fmt_levels(data: dict) -> str:
 
 
 def fmt_gaps(data: dict) -> str:
-    """Format /gaps/open response."""
+    """Format /gaps/open response. One quote block per gap (max 5),
+    newest first, status/range/weight/date in a fixed order."""
     gaps = data if isinstance(data, list) else data.get("gaps", [])
     if not gaps:
-        return "📭 گپ باز: ندارد" + DISCLAIMER
+        return "📭 <b>گپ باز:</b> ندارد" + DISCLAIMER
 
-    lines = ["📐 گپ‌های باز:"]
+    lines = ["📐 <b>گپ‌های باز</b>", DIVIDER]
     for g in gaps[:5]:
         status = g.get("status", "?")
         hi = g.get("gap_high", "?")
@@ -76,9 +90,40 @@ def fmt_gaps(data: dict) -> str:
         weight = g.get("weight")
         w_s = f"{weight:.2f}" if weight is not None else "?"
         ts = g.get("ts_utc", "")
-        lines.append(f"  • {status}: [{lo}–{hi}]  وزن: {w_s}  ({ts[:10]})")
+        lines.append(
+            "<blockquote>"
+            f"{status}: [{lo} – {hi}]\n"
+            f"وزن: {w_s}  |  تاریخ: {ts[:10]}"
+            "</blockquote>"
+        )
 
     return "\n".join(lines) + DISCLAIMER
+
+
+def fmt_start() -> str:
+    """The /start welcome text, in the same visual language as every other
+    reply (DIVIDER + one quote block for the command list)."""
+    lines = [
+        "👋 <b>ربات دستیار XAUUSD</b>",
+        DIVIDER,
+        "<blockquote>"
+        "/status — آخرین سیگنال\n"
+        "/levels — سطوح حمایت/مقاومت نزدیک\n"
+        "/gaps — گپ‌های باز\n"
+        "/news — رویدادهای اقتصادی پیش‌رو"
+        "</blockquote>",
+        "",
+        "⚠️ این ربات آزمایشی است — سیگنال‌ها تایید نهایی ندارند.",
+    ]
+    return "\n".join(lines)
+
+
+def fmt_error(label: str, exc: object) -> str:
+    """Uniform error reply for every command handler -- escapes the
+    exception text since it's now sent with parse_mode='HTML' (an
+    exception message containing a stray '<' used to risk breaking, or
+    silently truncating, the Telegram render)."""
+    return f"❌ <b>خطا در {label}:</b>\n{escape_html(exc)}"
 
 
 def fmt_news(data: dict) -> str:
@@ -90,5 +135,5 @@ def fmt_news(data: dict) -> str:
     if digest:
         return digest
     if not data.get("events"):
-        return "📭 رویداد اقتصادی پیش‌رو: ندارد" + DISCLAIMER
-    return f"📰 رویدادهای پیش‌رو ({data.get('count', 0)} رویداد)" + DISCLAIMER
+        return "📭 <b>رویداد اقتصادی پیش‌رو:</b> ندارد" + DISCLAIMER
+    return f"📰 <b>رویدادهای پیش‌رو</b> ({data.get('count', 0)} رویداد)" + DISCLAIMER

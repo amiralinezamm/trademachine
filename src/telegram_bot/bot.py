@@ -20,7 +20,14 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from src.telegram_bot.formatters import fmt_gaps, fmt_levels, fmt_news, fmt_status
+from src.telegram_bot.formatters import (
+    fmt_error,
+    fmt_gaps,
+    fmt_levels,
+    fmt_news,
+    fmt_start,
+    fmt_status,
+)
 
 load_dotenv()
 
@@ -47,15 +54,7 @@ async def _reply(update: Update, text: str, parse_mode: str | None = None) -> No
 # ── command handlers ──────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    text = (
-        "سلام! دستورهای موجود:\n"
-        "/status — آخرین سیگنال\n"
-        "/levels — سطوح حمایت/مقاومت نزدیک\n"
-        "/gaps   — گپ‌های باز\n"
-        "/news   — رویدادهای اقتصادی پیش‌رو\n\n"
-        "⚠️ این ربات آزمایشی است — سیگنال‌ها تایید نهایی ندارند."
-    )
-    await _reply(update, text)
+    await _reply(update, fmt_start(), parse_mode="HTML")
 
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -69,26 +68,26 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _reply(update, fmt_status(data), parse_mode="HTML")
     except Exception as exc:
         log.exception("cmd_status error")
-        await _reply(update, f"❌ خطا در دریافت سیگنال: {exc}")
+        await _reply(update, fmt_error("دریافت سیگنال", exc), parse_mode="HTML")
 
 
 async def cmd_levels(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         data = _get("/levels/near-price")
-        await _reply(update, fmt_levels(data))
+        await _reply(update, fmt_levels(data), parse_mode="HTML")
     except Exception as exc:
         log.exception("cmd_levels error")
-        await _reply(update, f"❌ خطا در دریافت سطوح: {exc}")
+        await _reply(update, fmt_error("دریافت سطوح", exc), parse_mode="HTML")
 
 
 async def cmd_gaps(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         as_of = datetime.now(timezone.utc).isoformat()
         data = _get("/gaps/open", as_of=as_of)
-        await _reply(update, fmt_gaps(data))
+        await _reply(update, fmt_gaps(data), parse_mode="HTML")
     except Exception as exc:
         log.exception("cmd_gaps error")
-        await _reply(update, f"❌ خطا در دریافت گپ‌ها: {exc}")
+        await _reply(update, fmt_error("دریافت گپ‌ها", exc), parse_mode="HTML")
 
 
 async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -98,7 +97,7 @@ async def cmd_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _reply(update, fmt_news(data), parse_mode="HTML")
     except Exception as exc:
         log.exception("cmd_news error")
-        await _reply(update, f"❌ خطا در دریافت اخبار: {exc}")
+        await _reply(update, fmt_error("دریافت اخبار", exc), parse_mode="HTML")
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
