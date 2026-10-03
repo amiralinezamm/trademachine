@@ -66,7 +66,7 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         # "show me the last signal" command (see fetch_latest_signal()
         # docstring in src/engine/signal_store.py).
         data = _get("/signal/last")
-        await _reply(update, fmt_status(data))
+        await _reply(update, fmt_status(data), parse_mode="HTML")
     except Exception as exc:
         log.exception("cmd_status error")
         await _reply(update, f"❌ خطا در دریافت سیگنال: {exc}")

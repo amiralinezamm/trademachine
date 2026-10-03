@@ -579,6 +579,8 @@ def _check_signal_sync(symbol: str, tf: str) -> dict:
         out = dict(signal)
         out["id"] = signal_id
         out["ts_utc"] = out["ts_utc"].isoformat()
+        from src.engine.signal_formatter import build_signal_alert_text
+        out["telegram_html"] = build_signal_alert_text(out)
         return {"signal": out}
     finally:
         conn.close()
@@ -647,12 +649,17 @@ def _check_reversal_close_sync(symbol: str, tf: str) -> dict | None:
             if detect_reversal_close(sig["direction"], structure):
                 mark_reversal_alert_sent(conn, sig["id"])
                 conn.commit()
-                return {
+                advisory = {
                     "signal_id": sig["id"], "direction": sig["direction"],
                     "entry": sig["entry"], "ts_utc": sig["ts_utc"].isoformat(),
                     "structure": structure,
                     "message": "توقف اجباری: ساختار بازار برخلاف این سیگنال برگشت — سیگنال باز را دستی ببندید.",
                 }
+                from src.engine.signal_formatter import build_reversal_advisory_text
+                advisory["telegram_html"] = build_reversal_advisory_text(
+                    advisory, current_price=float(latest_candle["close"])
+                )
+                return advisory
         return None
     finally:
         conn.close()
@@ -739,11 +746,16 @@ def _fetch_latest_signal_sync(symbol: str, tf: str) -> dict:
     conn = get_connection()
     try:
         sig = fetch_latest_signal(conn, symbol, tf)
+        current_candle = fetch_latest_closed_candle(conn, symbol, tf) if sig is not None else None
     finally:
         conn.close()
     if sig is None:
         return {"signal": None, "reason": "no_signal_stored"}
     sig["ts_utc"] = sig["ts_utc"].isoformat()
+    if current_candle is not None:
+        sig["current_price"] = float(current_candle["close"])
+    from src.engine.signal_formatter import build_signal_alert_text
+    sig["telegram_html"] = build_signal_alert_text(sig)
     return {"signal": sig}
 
 

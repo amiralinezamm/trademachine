@@ -90,8 +90,10 @@
     {
       "parameters": {
         "chatId": "-1003415771278",
-        "text": "={{ $json.signal.direction === 'BUY' ? '🟢' : '🔴' }} XAUUSD@ | {{ $json.signal.direction === 'BUY' ? 'خرید (BUY)' : 'فروش (SELL)' }}\nقیمت ورود: {{ $json.signal.entry.toFixed(3) }}\nSL (آن‌سوی سطح برخورد): {{ $json.signal.stop_loss.toFixed(3) }}\nTP (نزدیک سطح بعدی): {{ $json.signal.take_profit.toFixed(3) }}\nنسبت سود:ضرر: {{ $json.signal.components.sl_tp.rr.toFixed(2) }}:1{{ $json.signal.components.sl_tp.relaxed ? ' (زیر ۲:۱ — فقط چون اطمینان بالا بود)' : '' }}\nسطح برخوردی: {{ $json.signal.components.level_kind === 'support' ? 'حمایت' : 'مقاومت' }} [{{ $json.signal.components.level_price_low }} - {{ $json.signal.components.level_price_high }}]\nقدرت سطح: {{ $json.signal.components.level_strength.toFixed(3) }}\nفاصله تا سطح: {{ $json.signal.components.distance.toFixed(3) }} (ATR={{ $json.signal.components.atr.toFixed(3) }})\nقانون: {{ $json.signal.rule_version }} (status=testing، بک‌تست نشده)\nزمان (تهران): {{ $json.signal.ts_utc.toDateTime().setZone('Asia/Tehran').toFormat('yyyy-MM-dd HH:mm') }}",
-        "additionalFields": {}
+        "text": "={{ $json.signal.telegram_html }}",
+        "additionalFields": {
+          "parseMode": "HTML"
+        }
       },
       "id": "a1111111-0000-4000-8000-000000000004",
       "name": "Send Telegram message",
@@ -144,8 +146,10 @@
     {
       "parameters": {
         "chatId": "-1003415771278",
-        "text": "⚠️ توقف اجباری\n{{ $json.close_advisory.direction === 'BUY' ? '🟢 خرید' : '🔴 فروش' }} باز از {{ $json.close_advisory.ts_utc.toDateTime().setZone('Asia/Tehran').toFormat('yyyy-MM-dd HH:mm') }} (ورود {{ $json.close_advisory.entry.toFixed(3) }})\nساختار H1 برخلاف این پوزیشن برگشته ({{ $json.close_advisory.structure }}).\n{{ $json.close_advisory.message }}",
-        "additionalFields": {}
+        "text": "={{ $json.close_advisory.telegram_html }}",
+        "additionalFields": {
+          "parseMode": "HTML"
+        }
       },
       "id": "a1111111-0000-4000-8000-000000000006",
       "name": "Send reversal advisory",

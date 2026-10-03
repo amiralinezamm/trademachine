@@ -34,103 +34,88 @@ def test_status_no_signal_without_as_of():
     assert DISCLAIMER in msg
 
 
-def test_status_signal_shows_outcome_when_present():
-    data = {
-        "signal": {
-            "direction": "BUY",
-            "entry": 2350.5,
-            "ts_utc": "2026-09-19T10:05:00+00:00",
-            "outcome": "tp",
-            "components": {
-                "level_kind": "support",
-                "level_price_low": 2340.0,
-                "level_price_high": 2345.0,
-                "level_strength": 1.75,
-                "atr": 8.5,
-            },
-        }
+def _signal(**overrides):
+    base = {
+        "direction": "BUY",
+        "entry": 2350.5,
+        "stop_loss": 2340.0,
+        "take_profit": 2365.0,
+        "ts_utc": "2026-09-19T10:05:00+00:00",
+        "rule_version": "level_reversion_v1",
+        "components": {
+            "symbol": "XAUUSD@",
+            "level_kind": "support",
+            "level_price_low": 2340.0,
+            "level_price_high": 2345.0,
+            "level_strength": 1.75,
+            "atr": 8.5,
+            "net_votes": 3,
+            "sl_tp": {"rr": 2.1, "relaxed": False},
+            "market_structure": "bullish",
+        },
     }
+    base.update(overrides)
+    return base
+
+
+def test_status_signal_shows_outcome_when_present():
+    data = {"signal": _signal(outcome="tp")}
     msg = fmt_status(data)
-    assert "tp" in msg
+    assert "TP" in msg
 
 
 def test_status_signal_omits_outcome_line_when_absent():
-    data = {
-        "signal": {
-            "direction": "BUY",
-            "entry": 2350.5,
-            "ts_utc": "2026-09-19T10:05:00+00:00",
-            "components": {
-                "level_kind": "support",
-                "level_price_low": 2340.0,
-                "level_price_high": 2345.0,
-                "level_strength": 1.75,
-                "atr": 8.5,
-            },
-        }
-    }
+    data = {"signal": _signal()}
     msg = fmt_status(data)
     assert "نتیجه" not in msg
 
 
 def test_status_buy_signal():
-    data = {
-        "signal": {
-            "direction": "BUY",
-            "entry": 2350.5,
-            "ts_utc": "2026-09-19T10:05:00+00:00",
-            "components": {
-                "level_kind": "support",
-                "level_price_low": 2340.0,
-                "level_price_high": 2345.0,
-                "level_strength": 1.75,
-                "atr": 8.5,
-            },
-        }
-    }
+    data = {"signal": _signal()}
     msg = fmt_status(data)
     assert "BUY" in msg
-    assert "2350.5" in msg
-    assert "support" in msg
+    assert "2350.500" in msg
+    assert "حمایت" in msg
     assert "2340" in msg
     assert "1.75" in msg
-    assert DISCLAIMER in msg
 
 
 def test_status_sell_signal():
     data = {
-        "signal": {
-            "direction": "SELL",
-            "entry": 2410.0,
-            "ts_utc": "2026-09-19T11:00:00+00:00",
-            "components": {
+        "signal": _signal(
+            direction="SELL", entry=2410.0,
+            ts_utc="2026-09-19T11:00:00+00:00",
+            components={
+                "symbol": "XAUUSD@",
                 "level_kind": "resistance",
                 "level_price_low": 2415.0,
                 "level_price_high": 2420.0,
                 "level_strength": 2.3,
                 "atr": 9.0,
             },
-        }
+        )
     }
     msg = fmt_status(data)
     assert "SELL" in msg
     assert "🔴" in msg
-    assert DISCLAIMER in msg
 
 
 def test_status_missing_components():
-    data = {
-        "signal": {
-            "direction": "BUY",
-            "entry": 2300.0,
-            "ts_utc": "2026-09-19T09:00:00",
-            "components": {},
-        }
-    }
+    data = {"signal": _signal(components={})}
     msg = fmt_status(data)
     assert "BUY" in msg
     assert "?" in msg  # placeholders for missing fields
-    assert DISCLAIMER in msg
+
+
+def test_status_uses_telegram_html_field_verbatim_when_present():
+    """/signal/last attaches telegram_html itself (built from the SAME
+    builder the n8n alert uses) -- fmt_status must pass it through
+    untouched rather than re-deriving it, so the two surfaces can never
+    drift even if build_signal_alert_text's signature changes."""
+    sig = _signal()
+    sig["telegram_html"] = "<b>exact server-built text</b>"
+    msg = fmt_status({"signal": sig})
+    assert msg == "<b>exact server-built text</b>"
 
 
 # ── /levels ───────────────────────────────────────────────────────────────────

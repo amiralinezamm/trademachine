@@ -5,6 +5,8 @@ string. No DB access, no HTTP calls — easy to unit-test with mock data.
 """
 from __future__ import annotations
 
+from src.engine.signal_formatter import build_signal_alert_text
+
 DISCLAIMER = (
     "\n\n⚠️ این سیگنال‌ها آزمایشی‌اند و هنوز تایید نهایی نشده‌اند؛ "
     "مسئولیت هر تصمیم معاملاتی با شماست."
@@ -14,7 +16,10 @@ DISCLAIMER = (
 def fmt_status(data: dict) -> str:
     """Format /signal/last (the latest STORED signal — see
     src/engine/signal_store.py fetch_latest_signal for why this is a
-    separate endpoint from /signal/latest)."""
+    separate endpoint from /signal/latest). Renders the SAME layout the
+    n8n alert sends (src/engine/signal_formatter.build_signal_alert_text)
+    so /status never shows the signal differently from the original
+    alert. Send with parse_mode="HTML" (see src/telegram_bot/bot.py)."""
     sig = data.get("signal")
     if sig is None:
         reason = data.get("reason", "")
@@ -25,30 +30,9 @@ def fmt_status(data: dict) -> str:
         lines.append(f"دلیل: {reason}")
         return "\n".join(lines) + DISCLAIMER
 
-    comp = sig.get("components", {})
-    direction = sig.get("direction", "?")
-    entry = sig.get("entry", "?")
-    ts = sig.get("ts_utc", "")
-    level_lo = comp.get("level_price_low", "?")
-    level_hi = comp.get("level_price_high", "?")
-    level_kind = comp.get("level_kind", "?")
-    strength = comp.get("level_strength")
-    strength_s = f"{strength:.2f}" if strength is not None else "?"
-    atr = comp.get("atr")
-    atr_s = f"{atr:.2f}" if atr is not None else "?"
-
-    arrow = "🟢" if direction == "BUY" else "🔴"
-    lines = [
-        f"{arrow} سیگنال: {direction}",
-        f"💰 قیمت ورود: {entry}",
-        f"📊 ناحیه: {level_kind} [{level_lo}–{level_hi}]",
-        f"💪 قدرت سطح: {strength_s}  |  ATR: {atr_s}",
-        f"🕐 زمان: {ts}",
-    ]
-    outcome = sig.get("outcome")
-    if outcome:
-        lines.append(f"🏁 نتیجه: {outcome}")
-    return "\n".join(lines) + DISCLAIMER
+    if "telegram_html" in sig:
+        return sig["telegram_html"]
+    return build_signal_alert_text(sig)
 
 
 def fmt_levels(data: dict) -> str:
