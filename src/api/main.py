@@ -1116,21 +1116,34 @@ from src.features.matrix_store import (
 )
 
 
-def _compute_and_store_matrix_sync(symbol: str, ts: datetime, lookback_bars: int | None = None) -> dict:
-    conn = get_connection()
+def _compute_and_store_matrix_sync(symbol: str, ts: datetime, lookback_bars: int | None = None,
+                                    conn=None) -> dict:
+    """2026-09-30: optional `conn` param (I/O only, CLAUDE.md rule 6 unaffected --
+    the compute_matrix_score() call and every argument to it are unchanged).
+    conn=None (default, every existing caller incl. the live endpoint) keeps
+    the exact original behavior: this function opens its own connection,
+    commits, and closes it. A caller that already holds a connection (e.g. a
+    backfill looping over thousands of timestamps) may pass it in to reuse
+    one connection and control its own commit cadence instead of paying a
+    fresh connection + commit per call -- the live endpoint never does this."""
+    _owns_conn = conn is None
+    if _owns_conn:
+        conn = get_connection()
     try:
         params = load_matrix_params()
         candles_by_tf = fetch_candles_by_tf(conn, symbol, params["tf_list"], ts, lookback_bars)
         result = compute_matrix_score(candles_by_tf, ts, params)
         upsert_matrix_snapshot(conn, symbol, ts, result)
-        conn.commit()
+        if _owns_conn:
+            conn.commit()
         return {
             "symbol": symbol, "as_of": ts.isoformat(),
             "candle_counts": {tf: len(c) for tf, c in candles_by_tf.items()},
             **result,
         }
     finally:
-        conn.close()
+        if _owns_conn:
+            conn.close()
 
 
 @app.post("/matrix/compute")
@@ -1186,14 +1199,21 @@ from src.features.fibonacci_store import (
 )
 
 
-def _compute_and_store_fibonacci_sync(symbol: str, tf: str, ts: datetime, lookback_bars: int | None = None) -> dict:
-    conn = get_connection()
+def _compute_and_store_fibonacci_sync(symbol: str, tf: str, ts: datetime, lookback_bars: int | None = None,
+                                       conn=None) -> dict:
+    """2026-09-30: optional `conn` param, same rationale/contract as
+    _compute_and_store_matrix_sync's -- I/O only, compute_fibonacci() and
+    its arguments are byte-for-byte unchanged (CLAUDE.md rule 6)."""
+    _owns_conn = conn is None
+    if _owns_conn:
+        conn = get_connection()
     try:
         candles = fetch_candles(conn, symbol, tf, ts, lookback_bars=lookback_bars)
         active_levels = fetch_active_levels_for_fib(conn, symbol, tf, ts)
         zones = compute_fibonacci(candles, ts, symbol, tf, active_levels)
         result = upsert_fibonacci_zones(conn, zones)
-        conn.commit()
+        if _owns_conn:
+            conn.commit()
         by_role: dict = {}
         for z in zones:
             by_role[z["role"]] = by_role.get(z["role"], 0) + 1
@@ -1205,7 +1225,8 @@ def _compute_and_store_fibonacci_sync(symbol: str, tf: str, ts: datetime, lookba
             **result,
         }
     finally:
-        conn.close()
+        if _owns_conn:
+            conn.close()
 
 
 @app.post("/fibonacci/compute")

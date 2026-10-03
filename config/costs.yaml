@@ -38,3 +38,11 @@ commission: 0.0          # broker charges via spread only (confirmed by user)
 backtest:
   # timeout_bars: not read by the code — exit uses max_safety_bars (default 288)
   rule_version_suffix: "_bt"  # appended to rule_version for backtest writes; live reads filter the exact live rule_version, so "" would make replayed rows look live
+
+backfill:
+  # scripts/backfill_fibonacci.py, scripts/backfill_matrix.py (2026-09-30):
+  # commit every N bars instead of per-bar, over one shared connection, to
+  # avoid a fresh connection+commit per bar on a multi-hundred-thousand-bar
+  # historical run. I/O batching only -- the compute functions called per
+  # bar are the exact live ones, unchanged.
+  commit_batch_size: 500
